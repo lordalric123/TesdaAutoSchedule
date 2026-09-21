@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rtk ls *)",
+      "Bash(python -m py_compile app.py date_rules.py excel_loader.py storage.py monitoring_export.py)",
+      "Bash(pkill -f \"python app.py\")",
+      "Bash(netstat -ano)",
+      "Bash(findstr :5050)",
+      "Bash(cmd /c taskkill /PID 11540)"
+    ]
+  }
+}
