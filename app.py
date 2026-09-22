@@ -40,15 +40,13 @@ def resolve_data_dir() -> Path:
     if env_path:
         return Path(env_path).resolve()
 
-    for candidate in (PROJECT_DATA_DIR, LEGACY_PERSISTENT_DIR):
-        if candidate.exists():
-            files = list(candidate.glob("*.json"))
-            if files:
-                # Prefer the dataset with actual saved records; if both contain data,
-                # keep the project directory as the source of truth.
-                return candidate.resolve()
+    # Keep the repo data folder as the primary/default source of truth. This matches
+    # the requirement that the GitHub repository be authoritative, while Render can be
+    # a secondary/public deployment only.
+    if PROJECT_DATA_DIR.exists():
+        return PROJECT_DATA_DIR.resolve()
 
-    return PROJECT_DATA_DIR.resolve()
+    return LEGACY_PERSISTENT_DIR.resolve()
 
 
 DATA_DIR = resolve_data_dir()
