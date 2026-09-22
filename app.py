@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import tempfile
 import uuid
@@ -16,11 +17,20 @@ from werkzeug.utils import secure_filename
 
 from date_rules import calculate_derived_dates, parse_iso_date
 from excel_loader import ExcelRegistry
-from monitoring_export import build_monitoring_workbook
+from monitoring_export import build_assessor_history_workbook, build_monitoring_workbook
 from storage import JsonStore
 
 ROOT = Path(__file__).resolve().parent
-DATA_DIR = ROOT / "data"
+# The bundled/default Excel files shipped with the code — used only to seed a fresh
+# persistent data directory the first time the app runs there. Never written to.
+SEED_EXCEL_DIR = ROOT / "data" / "excel"
+
+# All writable app state (assessments, settings, uploaded Excel files, task checkmarks)
+# lives under DATA_DIR. On most hosting platforms the app's own source/container
+# filesystem is wiped or rebuilt on every deploy or restart, so anything written next
+# to app.py disappears. Point APP_DATA_DIR at a mounted persistent volume/disk in
+# production (see README/deploy notes) so uploads and edits survive restarts.
+DATA_DIR = Path(os.environ.get("APP_DATA_DIR") or (ROOT / "data")).resolve()
 EXCEL_DIR = DATA_DIR / "excel"
 STATIC_DIR = ROOT / "static"
 
@@ -28,6 +38,28 @@ DEFAULT_CENTERS = EXCEL_DIR / "assessment_centers.xlsx"
 DEFAULT_PROVINCE_ASSESSORS = EXCEL_DIR / "competency_assessors.xlsx"
 DEFAULT_REGION_ASSESSORS = EXCEL_DIR / "region_assessors.xlsx"
 DEFAULT_ASSESSORS = DEFAULT_PROVINCE_ASSESSORS
+
+
+def seed_excel_dir() -> None:
+    """Copy the bundled default Excel files into EXCEL_DIR if it's empty.
+
+    Only relevant the first time the app boots against a fresh, empty persistent
+    volume (APP_DATA_DIR pointed somewhere new). Never overwrites files that are
+    already there (e.g. ones a user has already uploaded).
+    """
+    if EXCEL_DIR.resolve() == SEED_EXCEL_DIR.resolve():
+        return
+    if not SEED_EXCEL_DIR.exists():
+        return
+    EXCEL_DIR.mkdir(parents=True, exist_ok=True)
+    for seed_file in SEED_EXCEL_DIR.glob("*.xlsx"):
+        dest = EXCEL_DIR / seed_file.name
+        if not dest.exists():
+            shutil.copy2(seed_file, dest)
+
+
+seed_excel_dir()
+
 
 DEFAULT_THEME = {
     "preset": "default",
@@ -72,6 +104,11 @@ settings_store = JsonStore(
 )
 assessments_store = JsonStore(DATA_DIR / "assessments.json", [])
 representatives_store = JsonStore(DATA_DIR / "representatives.json", [])
+task_status_store = JsonStore(DATA_DIR / "task_status.json", {})
+
+
+def task_id(assessment_id: str, kind: str, event_date: str) -> str:
+    return f"{assessment_id}::{kind}::{event_date}"
 
 
 def today() -> date:
@@ -319,7 +356,8 @@ def build_assessor_rotation(
                 )
 
     assessment_log = []
-    for item in decorated:
+    log_source = decorated if qualification else decorated_all
+    for item in log_source:
         entry_assessors = item["assessors"]
         if assessor_type:
             entry_assessors = [a for a in entry_assessors if a["assessor_type"] == assessor_type]
@@ -332,6 +370,7 @@ def build_assessor_rotation(
                 "end_date": item["end_date"],
                 "date_label": item["date_label"],
                 "assessment_center": item["assessment_center"],
+                "qualification": item["qualification"],
                 "pax": item["pax"],
                 "assessors": entry_assessors,
                 "tesda_representative": item.get("tesda_representative", ""),
@@ -371,6 +410,7 @@ def build_assessor_rotation(
 
 
 def calendar_events(calendar_type: str, year: int, month: int) -> dict[str, list[dict]]:
+    statuses = task_status_store.read()
     events: dict[str, list[dict]] = {}
     for assessment in assessments_store.read():
         item = decorate(assessment)
@@ -378,30 +418,38 @@ def calendar_events(calendar_type: str, year: int, month: int) -> dict[str, list
             for pair in item["approved_dates"]:
                 event_date = pair["date"]
                 if _in_month(event_date, year, month):
+                    tid = task_id(item["id"], "schedule", pair["assessment_date"])
                     events.setdefault(event_date, []).append(
                         {
                             "kind": "approved",
                             "title": "Create portal schedule",
                             "detail": f"Create portal schedule for {format_range(pair['assessment_date'], pair['assessment_date'])}.",
                             "assessment": item,
+                            "task_id": tid,
+                            "done": bool(statuses.get(tid, {}).get("done")),
                         }
                     )
         elif calendar_type == "results":
             for pair in item["results_reminder_dates"]:
                 event_date = pair["date"]
                 if _in_month(event_date, year, month):
+                    tid = task_id(item["id"], "results", pair["assessment_date"])
                     events.setdefault(event_date, []).append(
                         {
                             "kind": "results",
                             "title": "Results reminder",
                             "detail": f"Show/submit results for the assessment conducted on {format_range(pair['assessment_date'], pair['assessment_date'])}.",
                             "assessment": item,
+                            "task_id": tid,
+                            "done": bool(statuses.get(tid, {}).get("done")),
                         }
                     )
         else:
             if overlaps_month(item, year, month):
                 # Place the range on every assessment date so the month grid can show it,
-                # but the UI treats it as one continuous record.
+                # but the UI treats it as one continuous record, and one checklist task.
+                tid = task_id(item["id"], "assessment", item["start_date"])
+                done = bool(statuses.get(tid, {}).get("done"))
                 for day in item["assessment_dates"]:
                     if _in_month(day, year, month):
                         events.setdefault(day, []).append(
@@ -411,6 +459,8 @@ def calendar_events(calendar_type: str, year: int, month: int) -> dict[str, list
                                 "detail": item["date_label"],
                                 "assessment": item,
                                 "range_id": item["id"],
+                                "task_id": tid,
+                                "done": done,
                             }
                         )
     return events
@@ -652,12 +702,17 @@ def update_assessment(assessment_id: str):
 def delete_assessment(assessment_id: str):
     items = [row for row in assessments_store.read() if row["id"] != assessment_id]
     assessments_store.write(items)
+    statuses = task_status_store.read()
+    remaining = {tid: v for tid, v in statuses.items() if not tid.startswith(f"{assessment_id}::")}
+    if len(remaining) != len(statuses):
+        task_status_store.write(remaining)
     return jsonify({"ok": True})
 
 
 @app.get("/api/dashboard")
 def dashboard():
     current = today().isoformat()
+    statuses = task_status_store.read()
     assessments = [decorate(item) for item in assessments_store.read()]
     schedule_today = []
     results_today = []
@@ -670,31 +725,38 @@ def dashboard():
     seen_schedule = set()
     seen_results = set()
 
+    def with_task(item: dict, kind: str, event_date: str) -> dict:
+        tid = task_id(item["id"], kind, event_date)
+        return {**item, "task_id": tid, "done": bool(statuses.get(tid, {}).get("done"))}
+
     for item in assessments:
         start = parse_iso_date(item["start_date"])
         end = parse_iso_date(item["end_date"])
         if start.year == today().year and start.month == today().month:
             this_month += 1
         if start <= today() <= end:
-            assessments_today.append(item)
+            assessments_today.append(with_task(item, "assessment", item["start_date"]))
         if start > today():
-            upcoming.append(item)
+            upcoming.append(with_task(item, "assessment", item["start_date"]))
         for pair in item["schedule_reminder_dates"]:
             key = (item["id"], pair["assessment_date"], "schedule")
             if pair["date"] == current and key not in seen_schedule:
                 seen_schedule.add(key)
-                schedule_today.append({**pair, "assessment": item})
+                tid = task_id(item["id"], "schedule", pair["assessment_date"])
+                schedule_today.append({**pair, "assessment": item, "task_id": tid, "done": bool(statuses.get(tid, {}).get("done"))})
             if pair["date"] >= current:
                 needing_schedule.append(key)
         for pair in item["results_reminder_dates"]:
             key = (item["id"], pair["assessment_date"], "results")
             if pair["date"] == current and key not in seen_results:
                 seen_results.add(key)
-                results_today.append({**pair, "assessment": item})
+                tid = task_id(item["id"], "results", pair["assessment_date"])
+                results_today.append({**pair, "assessment": item, "task_id": tid, "done": bool(statuses.get(tid, {}).get("done"))})
             if pair["date"] == current:
                 results_due_count += 1
 
     upcoming.sort(key=lambda x: x["start_date"])
+    tasks_today_all = schedule_today + results_today + assessments_today
     return jsonify(
         {
             "today": current,
@@ -707,7 +769,8 @@ def dashboard():
                 "upcoming_assessments": len(upcoming),
                 "requiring_scheduling": len(set(needing_schedule)),
                 "results_due_today": results_due_count,
-                "tasks_today": len(schedule_today) + len(results_today) + len(assessments_today),
+                "tasks_today": len(tasks_today_all),
+                "tasks_pending_today": sum(1 for t in tasks_today_all if not t.get("done")),
             },
         }
     )
@@ -724,6 +787,7 @@ def calendar():
     compact = {
         day: {
             "count": len(items),
+            "pending": sum(1 for item in items if not item.get("done")),
             "kinds": sorted({item["kind"] for item in items}),
         }
         for day, items in events.items()
@@ -737,6 +801,48 @@ def calendar():
             "compact": compact,
             "events": events,
         }
+    )
+
+
+@app.post("/api/tasks/toggle")
+def toggle_task():
+    payload = request.get_json(force=True) or {}
+    tid = (payload.get("task_id") or "").strip()
+    if not tid:
+        return jsonify({"error": "task_id is required."}), 400
+    done = bool(payload.get("done", True))
+    statuses = task_status_store.read()
+    if done:
+        statuses[tid] = {"done": True, "done_at": datetime.now().isoformat(timespec="seconds")}
+    else:
+        statuses.pop(tid, None)
+    task_status_store.write(statuses)
+    return jsonify({"task_id": tid, "done": done})
+
+
+@app.get("/api/assessor-rotation/export")
+def export_assessor_history():
+    qualification = (request.args.get("qualification") or "").strip()
+    assessor_type = request.args.get("assessor_type") or ""
+    try:
+        data = build_assessor_rotation(assessments_store.read(), registry, qualification, assessor_type)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    title = f"Assessor History — {qualification}" if qualification else "Assessor History — All Qualifications"
+    buffer = build_assessor_history_workbook(data["assessment_log"], title=title)
+    stamp = datetime.now().strftime("%Y%m%d")
+    name_bits = ["Assessor_History"]
+    if qualification:
+        name_bits.append(qualification)
+    if assessor_type:
+        name_bits.append(assessor_type)
+    name_bits.append(stamp)
+    filename = secure_filename("_".join(name_bits) + ".xlsx")
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
 
@@ -806,6 +912,7 @@ def export_backup():
         )
         archive.writestr("assessments.json", json.dumps(assessments_store.read(), indent=2, ensure_ascii=False))
         archive.writestr("representatives.json", json.dumps(representatives_store.read(), indent=2, ensure_ascii=False))
+        archive.writestr("task_status.json", json.dumps(task_status_store.read(), indent=2, ensure_ascii=False))
         archive.writestr("settings.json", json.dumps(normalize_settings(settings), indent=2, ensure_ascii=False))
         for label, path_value in {
             "excel/assessment_centers.xlsx": settings.get("centers_path"),
@@ -858,6 +965,15 @@ def import_backup():
 
         assessments_store.write(assessments)
         representatives_store.write(representatives)
+
+        task_status_file = _find_backup_file(extract_dir, "task_status.json")
+        if task_status_file:
+            try:
+                task_statuses = json.loads(task_status_file.read_text(encoding="utf-8"))
+                if isinstance(task_statuses, dict):
+                    task_status_store.write(task_statuses)
+            except json.JSONDecodeError:
+                pass
 
         centers_src = _find_backup_file(extract_dir, "assessment_centers.xlsx")
         assessors_src = _find_backup_file(extract_dir, "competency_assessors.xlsx")

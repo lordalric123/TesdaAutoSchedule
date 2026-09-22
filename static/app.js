@@ -6,7 +6,7 @@ const state = {
   calendar: { type: "approved", year: new Date().getFullYear(), month: new Date().getMonth() + 1, payload: null },
   finder: { query: "", selected: "", source: "" },
   report: { year: new Date().getFullYear(), month: new Date().getMonth() + 1, q: "" },
-  history: { qualification: "", assessor_type: "", tab: "rotation" },
+  history: { qualification: "", assessor_type: "", tab: "log" },
   theme: null,
   editingId: null,
   prefill: null,
@@ -145,21 +145,31 @@ async function render(extra) {
   }
 }
 
-async function renderDashboard() {
-  const data = await api("/api/dashboard");
-  const taskList = (items, kind) => items.length ? items.map((item) => {
+function taskChecklist(items, kind) {
+  if (!items.length) return `<p class="empty">Nothing due in this group.</p>`;
+  return items.map((item) => {
     const a = item.assessment || item;
     const detail = kind === "schedule"
       ? `Create portal schedule for ${fmt(item.assessment_date)}`
       : kind === "results"
         ? `Submit results for ${fmt(item.assessment_date)}`
         : a.date_label;
-    return `<div class="task"><b>${escapeHtml(detail)}</b><span>${escapeHtml(a.assessment_center)} · ${escapeHtml(a.qualification)}</span></div>`;
-  }).join("") : `<p class="empty">Nothing due in this group.</p>`;
+    return `<div class="task ${item.done ? "task-done" : ""}">
+      <label class="task-check">
+        <input type="checkbox" data-dash-task-id="${escapeHtml(item.task_id)}" ${item.done ? "checked" : ""} />
+        <b>${escapeHtml(detail)}</b>
+      </label>
+      <span>${escapeHtml(a.assessment_center)} · ${escapeHtml(a.qualification)}</span>
+    </div>`;
+  }).join("");
+}
+
+async function renderDashboard() {
+  const data = await api("/api/dashboard");
 
   $("view-dashboard").innerHTML = `
     <div class="grid stats">
-      <div class="card"><div class="stat-value">${data.summary.tasks_today}</div><div class="stat-label">Tasks today</div></div>
+      <div class="card"><div class="stat-value">${data.summary.tasks_pending_today}</div><div class="stat-label">Tasks pending today (${data.summary.tasks_today} total)</div></div>
       <div class="card"><div class="stat-value">${data.summary.assessments_this_month}</div><div class="stat-label">Assessments this month</div></div>
       <div class="card"><div class="stat-value">${data.summary.upcoming_assessments}</div><div class="stat-label">Upcoming assessments</div></div>
       <div class="card"><div class="stat-value">${data.summary.requiring_scheduling}</div><div class="stat-label">Still needing portal schedule</div></div>
@@ -167,18 +177,33 @@ async function renderDashboard() {
     <div class="grid two" style="margin-top:16px">
       <div class="card">
         <h3>Today's tasks</h3>
-        <p class="hint">Portal schedule reminders and results due ${fmt(data.today)}.</p>
-        ${taskList(data.schedule_today, "schedule")}
-        ${taskList(data.results_today, "results")}
+        <p class="hint">Portal schedule reminders and results due ${fmt(data.today)}. Check them off once done.</p>
+        ${taskChecklist(data.schedule_today, "schedule")}
+        ${taskChecklist(data.results_today, "results")}
       </div>
       <div class="card">
         <h3>Today's assessments</h3>
-        ${taskList(data.assessments_today, "assessment")}
+        ${taskChecklist(data.assessments_today, "assessment")}
         <h3 style="margin-top:18px">Upcoming</h3>
-        ${taskList(data.upcoming, "assessment")}
+        ${taskChecklist(data.upcoming, "assessment")}
       </div>
     </div>
   `;
+  document.querySelectorAll("[data-dash-task-id]").forEach((box) => {
+    box.addEventListener("change", async () => {
+      const taskIdValue = box.dataset.dashTaskId;
+      const wasChecked = box.checked;
+      try {
+        await api("/api/tasks/toggle", { method: "POST", headers: jsonHeaders(), body: JSON.stringify({ task_id: taskIdValue, done: wasChecked }) });
+      } catch (err) {
+        toast(err.message, "error");
+        box.checked = !wasChecked;
+        return;
+      }
+      toast(wasChecked ? "Marked as done." : "Marked as not done.");
+      renderDashboard();
+    });
+  });
   maybeNotify(data);
 }
 
@@ -514,10 +539,11 @@ async function renderCalendar() {
     const iso = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
     const info = payload.compact[iso];
     const isToday = iso === payload.today;
+    const allDone = info && info.pending === 0;
     cells.push(`
-      <button class="day ${isToday ? "today" : ""}" data-day="${iso}" ${info ? "" : ""}>
+      <button class="day ${isToday ? "today" : ""}" data-day="${iso}">
         <div class="day-num">${day}</div>
-        ${info ? `<div class="day-alert">${info.count} ${info.count === 1 ? "alert" : "alerts"}</div>` : ""}
+        ${info ? `<div class="day-alert ${allDone ? "day-alert-done" : ""}">${allDone ? `${info.count} done ✓` : `${info.pending} pending`}</div>` : ""}
       </button>
     `);
   }
@@ -574,13 +600,18 @@ function showDay(iso) {
     return;
   }
   const uniqueAssessments = [];
+  const pendingCount = events.filter((e) => !e.done).length;
   const blocks = events.map((event) => {
     if (event.kind === "assessment" && uniqueAssessments.includes(event.assessment.id)) return "";
     if (event.kind === "assessment") uniqueAssessments.push(event.assessment.id);
     const icon = event.kind === "approved" ? "Approved Date" : event.kind === "results" ? "Results Reminder" : "Assessment";
     const a = event.assessment;
-    return `<div class="event-block">
-      <span class="chip ${event.kind === "results" ? "rose" : event.kind === "assessment" ? "gold" : ""}">${icon}</span>
+    return `<div class="event-block ${event.done ? "event-done" : ""}">
+      <label class="task-check">
+        <input type="checkbox" data-task-id="${escapeHtml(event.task_id)}" ${event.done ? "checked" : ""} />
+        <span class="chip ${event.kind === "results" ? "rose" : event.kind === "assessment" ? "gold" : ""}">${icon}</span>
+        ${event.done ? `<span class="chip" style="background:rgba(74,222,128,0.15);color:var(--ok)">Done</span>` : ""}
+      </label>
       <h3 style="margin-top:8px">${escapeHtml(event.title)}</h3>
       <p>${escapeHtml(event.detail)}</p>
       <p class="muted">${escapeHtml(a.assessment_center)} · ${escapeHtml(a.qualification)} · ${escapeHtml(a.date_label)}</p>
@@ -589,12 +620,15 @@ function showDay(iso) {
   }).join("");
   openModal(`
     <div class="modal-head">
-      <div><p class="eyebrow">${iso} — Today's Events</p><h2>${fmt(iso)} — ${events.length} ${events.length === 1 ? "Alert" : "Alerts"}</h2></div>
+      <div><p class="eyebrow">${iso} — ${pendingCount === 0 ? "All done" : `${pendingCount} pending`}</p><h2>${fmt(iso)} — ${events.length} ${events.length === 1 ? "Task" : "Tasks"}</h2></div>
       <button class="ghost" id="close-modal">Close</button>
     </div>
     ${blocks}
   `);
   $("close-modal").onclick = closeModal;
+  document.querySelectorAll("[data-task-id]").forEach((box) => {
+    box.addEventListener("change", () => toggleTask(box.dataset.taskId, box.checked, iso));
+  });
   document.querySelectorAll("[data-open]").forEach((btn) => {
     btn.addEventListener("click", () => {
       closeModal();
@@ -602,6 +636,28 @@ function showDay(iso) {
       switchView("scheduler");
     });
   });
+}
+
+async function toggleTask(taskId, done, iso) {
+  try {
+    await api("/api/tasks/toggle", { method: "POST", headers: jsonHeaders(), body: JSON.stringify({ task_id: taskId, done }) });
+  } catch (err) {
+    toast(err.message, "error");
+    return;
+  }
+  const events = state.calendar.payload?.events?.[iso] || [];
+  events.forEach((ev) => { if (ev.task_id === taskId) ev.done = done; });
+  const compact = state.calendar.payload?.compact?.[iso];
+  const pending = events.filter((ev) => !ev.done).length;
+  if (compact) compact.pending = pending;
+  const dayBtn = document.querySelector(`.day[data-day="${iso}"]`);
+  const alertEl = dayBtn?.querySelector(".day-alert");
+  if (alertEl) {
+    alertEl.textContent = pending === 0 ? `${events.length} done ✓` : `${pending} pending`;
+    alertEl.classList.toggle("day-alert-done", pending === 0);
+  }
+  toast(done ? "Marked as done." : "Marked as not done.");
+  showDay(iso);
 }
 
 async function renderFinder() {
@@ -721,7 +777,9 @@ async function renderHistory() {
   if (assessor_type) params.set("assessor_type", assessor_type);
   const data = await api(`/api/assessor-rotation?${params.toString()}`);
 
-  const rotationPanel = `
+  const rotationPanel = !data.qualification ? `
+    <p class="empty">Select a qualification above to see its assessor rotation — who's assessed it, when they last did, and who's next in line.</p>
+  ` : `
     <p class="hint">Rotation for <b>${escapeHtml(data.qualification)}</b> · sorted so whoever has gone longest without an assignment (or has never been assigned) is listed first. Click a row to see full assessment history.</p>
     ${data.rotation.length ? `<div class="table-wrap desktop-table"><table>
       <thead><tr><th>#</th><th>Assessor</th><th>Type</th><th>Times Assessed</th><th>Last Assessed</th><th>Since</th></tr></thead>
@@ -751,13 +809,14 @@ async function renderHistory() {
   `;
 
   const logPanel = `
-    <p class="hint">Every recorded assessment for <b>${escapeHtml(data.qualification)}</b>, most recent first.</p>
+    <p class="hint">${data.qualification ? `Every recorded assessment for <b>${escapeHtml(data.qualification)}</b>` : "Every recorded assessment across all qualifications"}, most recent first.</p>
     ${data.assessment_log.length ? `<div class="table-wrap desktop-table"><table>
-      <thead><tr><th>Date</th><th>Assessment Center</th><th>Assessor(s)</th><th>Pax</th></tr></thead>
+      <thead><tr><th>Date</th>${data.qualification ? "" : "<th>Qualification</th>"}<th>Assessment Center</th><th>Assessor(s)</th><th>Pax</th></tr></thead>
       <tbody>
         ${data.assessment_log.map((item) => `
           <tr class="log-row" data-open-assessment="${item.id}" style="cursor:pointer">
             <td>${escapeHtml(item.date_label)}</td>
+            ${data.qualification ? "" : `<td>${escapeHtml(item.qualification)}</td>`}
             <td>${escapeHtml(item.assessment_center)}</td>
             <td>${item.assessors.map((a) => `${escapeHtml(a.name)} <span class="muted">(${a.assessor_type === "region" ? "Region" : "Province"})</span>`).join("<br>")}</td>
             <td>${item.pax}</td>
@@ -768,10 +827,10 @@ async function renderHistory() {
     <div class="mobile-records">${data.assessment_log.map((item) => `
       <article class="record-card" data-open-assessment="${item.id}" style="cursor:pointer">
         <h4>${escapeHtml(item.date_label)}</h4>
-        <div class="muted">${escapeHtml(item.assessment_center)} · ${item.pax} pax</div>
+        <div class="muted">${data.qualification ? "" : `${escapeHtml(item.qualification)} · `}${escapeHtml(item.assessment_center)} · ${item.pax} pax</div>
         <div>${item.assessors.map((a) => `${escapeHtml(a.name)} (${a.assessor_type === "region" ? "Region" : "Province"})`).join(", ")}</div>
       </article>
-    `).join("")}</div>` : `<p class="empty">No recorded assessments yet for this qualification.</p>`}
+    `).join("")}</div>` : `<p class="empty">No recorded assessments yet.</p>`}
   `;
 
   $("view-history").innerHTML = `
@@ -779,7 +838,7 @@ async function renderHistory() {
       <div class="toolbar">
         <label>Qualification</label>
         <select id="hist-qual">
-          <option value="">Select a qualification</option>
+          <option value="">All qualifications</option>
           ${optionList(data.qualifications, data.qualification)}
         </select>
         <label>Assessor Type</label>
@@ -790,15 +849,12 @@ async function renderHistory() {
         </select>
         <button class="ghost" id="hist-reset" type="button">Clear filters</button>
       </div>
-      ${!data.qualification ? `
-        <p class="empty">Select a qualification above to see its assessor rotation and assessment history.</p>
-      ` : `
-        <div class="toolbar" style="margin-top:-6px">
-          <button class="${tab === "rotation" ? "primary" : "ghost"}" type="button" id="tab-rotation">Rotation Order</button>
-          <button class="${tab === "log" ? "primary" : "ghost"}" type="button" id="tab-log">Assessment History</button>
-        </div>
-        ${tab === "rotation" ? rotationPanel : logPanel}
-      `}
+      <div class="toolbar" style="margin-top:-6px">
+        <button class="${tab === "rotation" ? "primary" : "ghost"}" type="button" id="tab-rotation">Rotation Order</button>
+        <button class="${tab === "log" ? "primary" : "ghost"}" type="button" id="tab-log">Assessment History</button>
+        <a class="ghost" style="text-decoration:none;margin-left:auto" href="/api/assessor-rotation/export?qualification=${encodeURIComponent(data.qualification || "")}&assessor_type=${encodeURIComponent(data.assessor_type || "")}">Export to Excel</a>
+      </div>
+      ${tab === "rotation" ? rotationPanel : logPanel}
     </div>
   `;
 
@@ -814,7 +870,7 @@ async function renderHistory() {
     $(id).onchange = applyHistory;
   });
   $("hist-reset").onclick = () => {
-    state.history = { qualification: "", assessor_type: "", tab: "rotation" };
+    state.history = { qualification: "", assessor_type: "", tab: state.history.tab };
     renderHistory();
   };
   $("tab-rotation")?.addEventListener("click", () => { state.history.tab = "rotation"; renderHistory(); });

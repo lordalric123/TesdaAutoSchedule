@@ -150,6 +150,8 @@ body {
 .task:last-child { border-bottom: 0; }
 .task b { display: block; }
 .task span, .muted { color: var(--muted); font-size: 0.92rem; }
+.task.task-done { opacity: 0.55; }
+.task.task-done b { text-decoration: line-through; text-decoration-color: var(--muted); }
 .empty { color: var(--muted); padding: 18px 0; }
 
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; }
@@ -233,6 +235,22 @@ th { color: var(--gold); font-weight: 500; font-size: 0.75rem; letter-spacing: 0
 .day.today { box-shadow: inset 0 0 0 1px var(--gold); }
 .day-num { font-family: "IBM Plex Mono", monospace; font-size: 0.85rem; }
 .day-alert { margin-top: 10px; font-size: 0.78rem; color: var(--cyan-2); }
+.day-alert-done { color: var(--ok); }
+
+.task-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.task-check input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--ok);
+  cursor: pointer;
+}
+.event-block.event-done { opacity: 0.6; }
+.event-block.event-done h3 { text-decoration: line-through; text-decoration-color: var(--muted); }
 
 .finder-list { display: flex; flex-direction: column; gap: 10px; }
 .pick {
