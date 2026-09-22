@@ -27,11 +27,31 @@ SEED_EXCEL_DIR = ROOT / "data" / "excel"
 
 # All writable app state (assessments, settings, uploaded Excel files, task checkmarks)
 # lives under DATA_DIR.
-# We default to a user-writable directory outside the project folder so the data is
-# persistent even if the app code is refreshed or restarted. For hosted deployments,
-# set APP_DATA_DIR to a mounted persistent volume/disk so uploads and edits survive
-# restarts across rebuilds.
-DATA_DIR = Path(os.environ.get("APP_DATA_DIR") or (Path.home() / ".tesda_auto_schedule_data")).resolve()
+# Prefer an existing non-empty saved dataset so app restarts don't silently reset user
+# records. If APP_DATA_DIR is explicitly set, it wins. Otherwise, we choose the
+# project data folder if it already contains records; otherwise we fall back to a
+# user-level persistent directory. This avoids wiping valid data when switching
+# versions or moving the project.
+PROJECT_DATA_DIR = ROOT / "data"
+LEGACY_PERSISTENT_DIR = Path.home() / ".tesda_auto_schedule_data"
+
+def resolve_data_dir() -> Path:
+    env_path = os.environ.get("APP_DATA_DIR")
+    if env_path:
+        return Path(env_path).resolve()
+
+    for candidate in (PROJECT_DATA_DIR, LEGACY_PERSISTENT_DIR):
+        if candidate.exists():
+            files = list(candidate.glob("*.json"))
+            if files:
+                # Prefer the dataset with actual saved records; if both contain data,
+                # keep the project directory as the source of truth.
+                return candidate.resolve()
+
+    return PROJECT_DATA_DIR.resolve()
+
+
+DATA_DIR = resolve_data_dir()
 EXCEL_DIR = DATA_DIR / "excel"
 STATIC_DIR = ROOT / "static"
 
