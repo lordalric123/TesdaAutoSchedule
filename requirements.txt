@@ -3,3 +3,4 @@ pandas
 python-calamine
 openpyxl
 werkzeug
+gunicorn
