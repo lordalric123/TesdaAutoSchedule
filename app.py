@@ -26,11 +26,12 @@ ROOT = Path(__file__).resolve().parent
 SEED_EXCEL_DIR = ROOT / "data" / "excel"
 
 # All writable app state (assessments, settings, uploaded Excel files, task checkmarks)
-# lives under DATA_DIR. On most hosting platforms the app's own source/container
-# filesystem is wiped or rebuilt on every deploy or restart, so anything written next
-# to app.py disappears. Point APP_DATA_DIR at a mounted persistent volume/disk in
-# production (see README/deploy notes) so uploads and edits survive restarts.
-DATA_DIR = Path(os.environ.get("APP_DATA_DIR") or (ROOT / "data")).resolve()
+# lives under DATA_DIR.
+# We default to a user-writable directory outside the project folder so the data is
+# persistent even if the app code is refreshed or restarted. For hosted deployments,
+# set APP_DATA_DIR to a mounted persistent volume/disk so uploads and edits survive
+# restarts across rebuilds.
+DATA_DIR = Path(os.environ.get("APP_DATA_DIR") or (Path.home() / ".tesda_auto_schedule_data")).resolve()
 EXCEL_DIR = DATA_DIR / "excel"
 STATIC_DIR = ROOT / "static"
 
