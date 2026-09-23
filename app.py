@@ -271,8 +271,27 @@ def normalize_assessors(payload: dict, existing: dict | None = None) -> list[dic
     return assessors
 
 
-def decorate(assessment: dict) -> dict:
+def normalize_derived_dates(assessment: dict) -> dict:
     item = dict(assessment)
+    try:
+        start = parse_iso_date(item.get("start_date") or item.get("assessment_date") or date.today().isoformat())
+        end = parse_iso_date(item.get("end_date") or item.get("start_date") or item.get("assessment_date") or date.today().isoformat())
+        duration_type = item.get("duration_type") or "single"
+        if duration_type not in {"single", "continuous"}:
+            duration_type = "single"
+        derived = calculate_derived_dates(start, end, duration_type)
+        item["assessment_dates"] = derived["assessment_dates"]
+        item["approved_dates"] = derived["approved_dates"]
+        item["schedule_reminder_dates"] = derived["schedule_reminder_dates"]
+        item["results_reminder_dates"] = derived["results_reminder_dates"]
+    except Exception:
+        pass
+    return item
+
+
+def decorate(assessment: dict) -> dict:
+    item = normalize_derived_dates(assessment)
+
     assessors = list(item.get("assessors") or [])
     if not assessors and item.get("assessor"):
         assessors = [{"name": item.get("assessor", ""), "assessor_type": _assessor_type_value(item)}]
@@ -344,6 +363,14 @@ def get_assessment(assessment_id: str) -> dict | None:
         if item["id"] == assessment_id:
             return item
     return None
+
+
+def normalize_saved_assessments() -> list[dict]:
+    updated: list[dict] = []
+    for assessment in assessments_store.read():
+        updated.append(normalize_derived_dates(assessment))
+    assessments_store.write(updated)
+    return updated
 
 
 def overlaps_year(assessment: dict, year: int) -> bool:
@@ -1104,6 +1131,7 @@ def _find_backup_file(root: Path, name: str) -> Path | None:
 
 try:
     load_registry()
+    normalize_saved_assessments()
 except Exception as exc:
     registry.error = str(exc)
 

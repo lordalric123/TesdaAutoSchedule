@@ -30,6 +30,35 @@ def test_continuous_keeps_weekend_reminder():
     assert derived["end_date"] == "2026-09-14"
 
 
+def test_old_single_day_schedule_dates_are_recomputed_to_business_days():
+    from app import decorate
+
+    stale = {
+        "id": "old-1",
+        "assessment_center": "Center",
+        "qualification": "Qualification",
+        "duration_type": "single",
+        "start_date": "2026-09-28",
+        "end_date": "2026-09-28",
+        "pax": 10,
+        "assessors": [],
+        "tesda_representative": "Jane",
+        "approved_dates": [{"assessment_date": "2026-09-28", "date": "2026-09-26"}],
+        "schedule_reminder_dates": [{"assessment_date": "2026-09-28", "date": "2026-09-26"}],
+        "results_reminder_dates": [{"assessment_date": "2026-09-28", "date": "2026-09-29"}],
+        "assessment_dates": ["2026-09-28"],
+    }
+
+    item = decorate(stale)
+    assert item["approved_dates"][0]["date"] == "2026-09-24"
+    assert item["schedule_reminder_dates"][0]["date"] == "2026-09-24"
+    assert item["assessor_warning"] == "Warning: no assessor assigned yet."
+
+
+def test_single_day_monday_uses_previous_thursday():
+    assert schedule_reminder_for_assessment_date(date(2026, 9, 28), "single").isoformat() == "2026-09-24"
+
+
 def test_monitoring_date_labels():
     from monitoring_export import compact_approved_dates, compact_day_span
 
