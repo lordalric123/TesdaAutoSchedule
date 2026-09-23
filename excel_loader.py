@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 from datetime import datetime
 from pathlib import Path
@@ -69,51 +68,6 @@ def _read_excel(path: Path) -> pd.DataFrame:
     return df
 
 
-def _read_json_records(path: Path) -> list[dict]:
-    if not path.exists():
-        raise FileNotFoundError(f"JSON data file not found: {path}")
-    with path.open("r", encoding="utf-8") as handle:
-        payload = json.load(handle)
-    if not isinstance(payload, list):
-        raise ValueError(f"JSON registry file must be a list of records: {path}")
-    return [dict(item) for item in payload if isinstance(item, dict)]
-
-
-def export_registry_to_json(excel_dir: Path, output_dir: Path | None = None) -> dict[str, Path]:
-    """Convert the shipped Excel registries into JSON so they can be reused across deployments."""
-    source_dir = Path(excel_dir)
-    target_dir = Path(output_dir) if output_dir else source_dir
-    target_dir.mkdir(parents=True, exist_ok=True)
-
-    output = {}
-    centers_path = source_dir / "assessment_centers.xlsx"
-    province_path = source_dir / "competency_assessors.xlsx"
-    region_path = source_dir / "region_assessors.xlsx"
-
-    if centers_path.exists():
-        centers_df = _read_excel(centers_path)
-        rows = [_center_record(row) for _, row in centers_df.iterrows()]
-        export_path = target_dir / "assessment_centers.json"
-        export_path.write_text(json.dumps(rows, indent=2, ensure_ascii=False), encoding="utf-8")
-        output["centers"] = export_path
-
-    if province_path.exists():
-        province_df = _read_excel(province_path)
-        rows = [_assessor_record(row, "province") for _, row in province_df.iterrows()]
-        export_path = target_dir / "competency_assessors.json"
-        export_path.write_text(json.dumps(rows, indent=2, ensure_ascii=False), encoding="utf-8")
-        output["province"] = export_path
-
-    if region_path.exists():
-        region_df = _read_excel(region_path)
-        rows = [_assessor_record(row, "region") for _, row in region_df.iterrows()]
-        export_path = target_dir / "region_assessors.json"
-        export_path.write_text(json.dumps(rows, indent=2, ensure_ascii=False), encoding="utf-8")
-        output["region"] = export_path
-
-    return output
-
-
 def _validate(df: pd.DataFrame, required: list[str], label: str) -> None:
     missing = [col for col in required if col not in df.columns]
     if missing:
@@ -158,90 +112,21 @@ class ExcelRegistry:
         self.region_assessors_path = Path(region_assessors_path) if region_assessors_path else None
         self.error = None
         try:
-            if self.centers_path.suffix.lower() == ".json":
-                centers_rows = _read_json_records(self.centers_path)
-                self.center_rows = [
-                    {
-                        "region": row.get("region", ""),
-                        "province": row.get("province", ""),
-                        "center": row.get("center", ""),
-                        "center_key": row.get("center_key", normalize_key(row.get("center", ""))),
-                        "address": row.get("address", ""),
-                        "manager": row.get("manager", ""),
-                        "telephone": row.get("telephone", ""),
-                        "sector": row.get("sector", ""),
-                        "qualification": row.get("qualification", ""),
-                        "qualification_key": row.get("qualification_key", normalize_key(row.get("qualification", ""))),
-                        "accreditation_number": row.get("accreditation_number", ""),
-                        "date_accredited": row.get("date_accredited", ""),
-                        "valid_until": row.get("valid_until", ""),
-                    }
-                    for row in centers_rows
-                ]
-            else:
-                centers_df = _read_excel(self.centers_path)
-                _validate(centers_df, REQUIRED_CENTER_COLUMNS, "Assessment Centers Excel")
-                self.center_rows = [_center_record(row) for _, row in centers_df.iterrows()]
+            centers_df = _read_excel(self.centers_path)
+            _validate(centers_df, REQUIRED_CENTER_COLUMNS, "Assessment Centers Excel")
+            self.center_rows = [_center_record(row) for _, row in centers_df.iterrows()]
             self.center_rows = [r for r in self.center_rows if r["center"] and r["qualification"]]
-
-            if self.province_assessors_path and self.province_assessors_path.suffix.lower() == ".json":
-                self.province_rows = _read_json_records(self.province_assessors_path)
-                self.province_rows = [
-                    {
-                        "source": row.get("source", "province"),
-                        "region": row.get("region", ""),
-                        "province": row.get("province", ""),
-                        "name": row.get("name", ""),
-                        "name_key": row.get("name_key", normalize_key(row.get("name", ""))),
-                        "identity_key": row.get("identity_key", identity_key(row.get("name", ""), row.get("accreditation_number", ""), row.get("date_of_birth", ""), row.get("address", ""))),
-                        "address": row.get("address", ""),
-                        "sex": row.get("sex", ""),
-                        "date_of_birth": row.get("date_of_birth", ""),
-                        "designation": row.get("designation", ""),
-                        "company": row.get("company", ""),
-                        "sector": row.get("sector", ""),
-                        "qualification": row.get("qualification", ""),
-                        "qualification_key": row.get("qualification_key", normalize_key(row.get("qualification", ""))),
-                        "accreditation_number": row.get("accreditation_number", ""),
-                        "valid_until": row.get("valid_until", ""),
-                    }
-                    for row in _read_json_records(self.province_assessors_path)
-                ]
-            else:
-                self.province_rows = _load_assessor_file(
-                    self.province_assessors_path,
-                    "province",
-                    "Province-Based Competency Assessors Excel",
-                )
+            self.province_rows = _load_assessor_file(
+                self.province_assessors_path,
+                "province",
+                "Province-Based Competency Assessors Excel",
+            )
             try:
-                if self.region_assessors_path and self.region_assessors_path.suffix.lower() == ".json":
-                    self.region_rows = [
-                        {
-                            "source": row.get("source", "region"),
-                            "region": row.get("region", ""),
-                            "province": row.get("province", ""),
-                            "name": row.get("name", ""),
-                            "name_key": row.get("name_key", normalize_key(row.get("name", ""))),
-                            "identity_key": row.get("identity_key", identity_key(row.get("name", ""), row.get("accreditation_number", ""), row.get("date_of_birth", ""), row.get("address", ""))),
-                            "address": row.get("address", ""),
-                            "sex": row.get("sex", ""),
-                            "date_of_birth": row.get("date_of_birth", ""),
-                            "designation": row.get("designation", ""),
-                            "company": row.get("company", ""),
-                            "sector": row.get("sector", ""),
-                            "qualification": row.get("qualification", ""),
-                            "qualification_key": row.get("qualification_key", normalize_key(row.get("qualification", ""))),
-                            "accreditation_number": row.get("accreditation_number", ""),
-                            "valid_until": row.get("valid_until", ""),
-                        }
-                        for row in _read_json_records(self.region_assessors_path)
-                    ]
-                else:
-                    self.region_rows = _load_assessor_file(
-                        self.region_assessors_path,
-                        "region",
-                        "Region-Based Competency Assessors Excel",
-                    )
+                self.region_rows = _load_assessor_file(
+                    self.region_assessors_path,
+                    "region",
+                    "Region-Based Competency Assessors Excel",
+                )
             except FileNotFoundError:
                 self.region_rows = []
             self.loaded_at = datetime.now().isoformat(timespec="seconds")

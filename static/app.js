@@ -405,14 +405,17 @@ async function renderScheduler(extra) {
     payload.assessors = assessorRows
       .filter((row) => row.assessor)
       .map((row) => ({ name: row.assessor, assessor_type: row.assessor_type }));
-
+    if (!payload.assessors.length) {
+      toast("Add at least one assessor.", "error");
+      return;
+    }
     try {
       if (editing) {
         await api(`/api/assessments/${editing.id}`, { method: "PUT", headers: jsonHeaders(), body: JSON.stringify(payload) });
-        toast(payload.assessors.length ? "Assessment updated. Dates recalculated." : "Assessment updated with no assessor assigned yet.", payload.assessors.length ? "ok" : "warning");
+        toast("Assessment updated. Dates recalculated.");
       } else {
         await api("/api/assessments", { method: "POST", headers: jsonHeaders(), body: JSON.stringify(payload) });
-        toast(payload.assessors.length ? "Assessment saved." : "Assessment saved without an assessor. Warning: no assessor assigned yet.", payload.assessors.length ? "ok" : "warning");
+        toast("Assessment saved.");
       }
       state.editingId = null;
       state.prefill = null;

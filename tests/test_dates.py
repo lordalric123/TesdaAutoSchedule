@@ -8,6 +8,10 @@ def test_single_day_monday_moves_to_thursday():
     assert derived["results_reminder_dates"][0]["date"] == "2026-09-15"
 
 
+def test_single_day_monday_28_moves_to_previous_thursday():
+    assert schedule_reminder_for_assessment_date(date(2026, 9, 28), "single").isoformat() == "2026-09-24"
+
+
 def test_single_day_tuesday_moves_to_friday():
     assert schedule_reminder_for_assessment_date(date(2026, 9, 15), "single").isoformat() == "2026-09-11"
 
@@ -22,7 +26,7 @@ def test_continuous_keeps_weekend_reminder():
     assert by_assessment["2026-09-11"] == "2026-09-09"
     assert by_assessment["2026-09-12"] == "2026-09-10"
     assert by_assessment["2026-09-13"] == "2026-09-11"
-    assert by_assessment["2026-09-14"] == "2026-09-12"
+    assert by_assessment["2026-09-14"] == "2026-09-10"
     results = {row["assessment_date"]: row["date"] for row in derived["results_reminder_dates"]}
     assert results["2026-09-11"] == "2026-09-12"
     assert results["2026-09-14"] == "2026-09-15"

@@ -20,25 +20,28 @@ def daterange(start: date, end: date) -> list[date]:
     return [start + timedelta(days=i) for i in range(days + 1)]
 
 
-def adjust_weekend_for_single_day(reminder: date) -> date:
-    """Move Saturday/Sunday reminders to the preceding weekday.
+def previous_business_day(value: date) -> date:
+    candidate = value - timedelta(days=1)
+    while candidate.weekday() >= 5:  # Saturday or Sunday
+        candidate -= timedelta(days=1)
+    return candidate
 
-    Saturday -> Thursday
-    Sunday -> Friday
-    """
+
+def adjust_weekend_for_single_day(reminder: date) -> date:
+    """Move Saturday/Sunday reminders to the preceding weekday."""
     weekday = reminder.weekday()  # Mon=0 ... Sat=5 Sun=6
-    if weekday == 5:  # Saturday
-        return reminder - timedelta(days=2)
-    if weekday == 6:  # Sunday
-        return reminder - timedelta(days=2)
+    if weekday >= 5:
+        return previous_business_day(reminder)
     return reminder
 
 
 def schedule_reminder_for_assessment_date(assessment_date: date, duration_type: DurationType) -> date:
-    reminder = assessment_date - timedelta(days=2)
     if duration_type == "single":
-        return adjust_weekend_for_single_day(reminder)
-    return reminder
+        reminder = assessment_date
+        for _ in range(2):
+            reminder = previous_business_day(reminder)
+        return reminder
+    return assessment_date - timedelta(days=2)
 
 
 def results_reminder_for_assessment_date(assessment_date: date) -> date:

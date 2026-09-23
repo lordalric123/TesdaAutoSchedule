@@ -1,22 +1,5 @@
-from app import build_assessment, build_assessor_history
+from app import build_assessor_history
 from excel_loader import _group_assessors, identity_key
-
-
-def test_build_assessment_allows_missing_assessor():
-    payload = {
-        "assessment_center": "Center A",
-        "qualification": "Bread and Pastry Production NC II",
-        "duration_type": "single",
-        "start_date": "2026-10-15",
-        "end_date": "2026-10-15",
-        "pax": 12,
-        "assessors": [],
-        "tesda_representative": "Jane Doe",
-    }
-    assessment = build_assessment(payload)
-    assert assessment["assessors"] == []
-    assert assessment["assessor"] == ""
-    assert assessment["assessor_type"] == "province"
 
 
 def test_identity_key_ignores_spacing_and_case():

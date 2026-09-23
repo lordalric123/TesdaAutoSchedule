@@ -24,7 +24,6 @@ ROOT = Path(__file__).resolve().parent
 # The bundled/default Excel files shipped with the code — used only to seed a fresh
 # persistent data directory the first time the app runs there. Never written to.
 SEED_EXCEL_DIR = ROOT / "data" / "excel"
-REGISTRY_CACHE_PATH = ROOT / "data" / "registry_cache.json"
 
 # All writable app state (assessments, settings, uploaded Excel files, task checkmarks)
 # lives under DATA_DIR.
@@ -35,12 +34,6 @@ REGISTRY_CACHE_PATH = ROOT / "data" / "registry_cache.json"
 # versions or moving the project.
 PROJECT_DATA_DIR = ROOT / "data"
 LEGACY_PERSISTENT_DIR = Path.home() / ".tesda_auto_schedule_data"
-
-JSON_REGISTRY_DEFAULTS = {
-    "centers_path": str(PROJECT_DATA_DIR / "assessment_centers.json"),
-    "province_assessors_path": str(PROJECT_DATA_DIR / "competency_assessors.json"),
-    "region_assessors_path": str(PROJECT_DATA_DIR / "region_assessors.json"),
-}
 
 def resolve_data_dir() -> Path:
     env_path = os.environ.get("APP_DATA_DIR")
@@ -60,9 +53,9 @@ DATA_DIR = resolve_data_dir()
 EXCEL_DIR = DATA_DIR / "excel"
 STATIC_DIR = ROOT / "static"
 
-DEFAULT_CENTERS = PROJECT_DATA_DIR / "assessment_centers.json"
-DEFAULT_PROVINCE_ASSESSORS = PROJECT_DATA_DIR / "competency_assessors.json"
-DEFAULT_REGION_ASSESSORS = PROJECT_DATA_DIR / "region_assessors.json"
+DEFAULT_CENTERS = EXCEL_DIR / "assessment_centers.xlsx"
+DEFAULT_PROVINCE_ASSESSORS = EXCEL_DIR / "competency_assessors.xlsx"
+DEFAULT_REGION_ASSESSORS = EXCEL_DIR / "region_assessors.xlsx"
 DEFAULT_ASSESSORS = DEFAULT_PROVINCE_ASSESSORS
 
 
@@ -143,18 +136,6 @@ def today() -> date:
 
 def normalize_settings(raw: dict | None = None) -> dict:
     settings = dict(raw or settings_store.read())
-
-    def prefer_json_if_available(path_key: str, json_default: str) -> None:
-        current = (settings.get(path_key) or "").strip()
-        if current and current.lower().endswith(".xlsx") and Path(json_default).exists():
-            settings[path_key] = json_default
-        elif not current and Path(json_default).exists():
-            settings[path_key] = json_default
-
-    prefer_json_if_available("centers_path", str(DEFAULT_CENTERS))
-    prefer_json_if_available("province_assessors_path", str(DEFAULT_PROVINCE_ASSESSORS))
-    prefer_json_if_available("region_assessors_path", str(DEFAULT_REGION_ASSESSORS))
-
     if not settings.get("province_assessors_path"):
         settings["province_assessors_path"] = settings.get("assessors_path") or str(DEFAULT_PROVINCE_ASSESSORS)
     settings["assessors_path"] = settings["province_assessors_path"]
@@ -173,48 +154,6 @@ def load_registry() -> None:
         settings["province_assessors_path"],
         settings.get("region_assessors_path"),
     )
-
-
-def build_assessor_history(
-    assessments: list[dict],
-    year: int,
-    month: int | None = None,
-    qualification: str = "",
-    assessor_type: str = "",
-    source: str = "",
-) -> dict:
-    """Compatibility wrapper used by older tests and callers."""
-    month_value = int(month) if month is not None else None
-    ass_type = (assessor_type or source or "").strip()
-    data = build_assessor_rotation(
-        assessments,
-        registry,
-        qualification=qualification,
-        assessor_type=ass_type,
-    )
-    results = []
-    for item in data["rotation"]:
-        if month_value is not None:
-            relevant = [
-                history
-                for history in item.get("history", [])
-                if parse_iso_date(history["date"]).year == year and parse_iso_date(history["date"]).month == month_value
-            ]
-            if not relevant:
-                continue
-        results.append(
-            {
-                "assessor": item["assessor"],
-                "assessor_type": item["assessor_type"],
-                "assessments_conducted": item.get("assessments_conducted", len(item.get("history", []))),
-                "last_assessment_date": item.get("last_assessment_date"),
-            }
-        )
-    if month_value is not None:
-        label = date(year, month_value, 1).strftime("%B %Y")
-    else:
-        label = str(year)
-    return {"period_label": label, "results": results}
 
 
 def unique_dates(pairs: list[dict], key: str = "date") -> list[str]:
@@ -271,43 +210,22 @@ def normalize_assessors(payload: dict, existing: dict | None = None) -> list[dic
     return assessors
 
 
-def normalize_derived_dates(assessment: dict) -> dict:
-    item = dict(assessment)
-    try:
-        start = parse_iso_date(item.get("start_date") or item.get("assessment_date") or date.today().isoformat())
-        end = parse_iso_date(item.get("end_date") or item.get("start_date") or item.get("assessment_date") or date.today().isoformat())
-        duration_type = item.get("duration_type") or "single"
-        if duration_type not in {"single", "continuous"}:
-            duration_type = "single"
-        derived = calculate_derived_dates(start, end, duration_type)
-        item["assessment_dates"] = derived["assessment_dates"]
-        item["approved_dates"] = derived["approved_dates"]
-        item["schedule_reminder_dates"] = derived["schedule_reminder_dates"]
-        item["results_reminder_dates"] = derived["results_reminder_dates"]
-    except Exception:
-        pass
-    return item
-
-
 def decorate(assessment: dict) -> dict:
-    item = normalize_derived_dates(assessment)
-
-    assessors = list(item.get("assessors") or [])
-    if not assessors and item.get("assessor"):
-        assessors = [{"name": item.get("assessor", ""), "assessor_type": _assessor_type_value(item)}]
-    item["assessors"] = assessors
-    item["has_assessor"] = bool(assessors)
-    item["assessor"] = assessors[0]["name"] if assessors else ""
-    item["assessor_type"] = assessors[0]["assessor_type"] if assessors else "province"
-    item["assessor_warning"] = "" if item["has_assessor"] else "Warning: no assessor assigned yet."
+    item = dict(assessment)
+    if not item.get("assessors"):
+        item["assessors"] = [
+            {
+                "name": item.get("assessor", ""),
+                "assessor_type": _assessor_type_value(item),
+            }
+        ]
+    item.setdefault("assessor", item["assessors"][0]["name"])
+    item.setdefault("assessor_type", item["assessors"][0]["assessor_type"])
     item["assessor_type_label"] = "Region-Based" if item["assessor_type"] == "region" else "Province-Based"
-    if item["has_assessor"]:
-        item["assessors_label"] = "; ".join(
-            f"{a['name']} ({'Region-Based' if a['assessor_type'] == 'region' else 'Province-Based'})"
-            for a in item["assessors"]
-        )
-    else:
-        item["assessors_label"] = "No assessor assigned yet"
+    item["assessors_label"] = "; ".join(
+        f"{a['name']} ({'Region-Based' if a['assessor_type'] == 'region' else 'Province-Based'})"
+        for a in item["assessors"]
+    )
     item["date_label"] = format_range(item["start_date"], item["end_date"])
     item["approved_date_list"] = unique_dates(item["approved_dates"])
     item["schedule_reminder_list"] = unique_dates(item["schedule_reminder_dates"])
@@ -332,10 +250,11 @@ def build_assessment(payload: dict, existing: dict | None = None) -> dict:
     representative = (payload.get("tesda_representative") or "").strip()
     if not center or not qualification:
         raise ValueError("Assessment center and qualification are required.")
+    if not assessors:
+        raise ValueError("At least one assessor is required.")
 
     derived = calculate_derived_dates(start, end, duration_type)
     now = datetime.now().isoformat(timespec="seconds")
-    assignee = assessors[0] if assessors else {"name": "", "assessor_type": "province"}
     return {
         "id": existing["id"] if existing else str(uuid.uuid4()),
         "assessment_center": center,
@@ -346,8 +265,8 @@ def build_assessment(payload: dict, existing: dict | None = None) -> dict:
         "pax": pax,
         "assessors": assessors,
         # legacy single-assessor fields kept in sync for any old code/exports that read them
-        "assessor": assignee["name"],
-        "assessor_type": assignee["assessor_type"],
+        "assessor": assessors[0]["name"],
+        "assessor_type": assessors[0]["assessor_type"],
         "tesda_representative": representative,
         "assessment_dates": derived["assessment_dates"],
         "approved_dates": derived["approved_dates"],
@@ -363,14 +282,6 @@ def get_assessment(assessment_id: str) -> dict | None:
         if item["id"] == assessment_id:
             return item
     return None
-
-
-def normalize_saved_assessments() -> list[dict]:
-    updated: list[dict] = []
-    for assessment in assessments_store.read():
-        updated.append(normalize_derived_dates(assessment))
-    assessments_store.write(updated)
-    return updated
 
 
 def overlaps_year(assessment: dict, year: int) -> bool:
@@ -1131,7 +1042,6 @@ def _find_backup_file(root: Path, name: str) -> Path | None:
 
 try:
     load_registry()
-    normalize_saved_assessments()
 except Exception as exc:
     registry.error = str(exc)
 
