@@ -1219,6 +1219,15 @@ setInterval(tickClock, 60_000);
   try {
     const settings = await api("/api/settings");
     applyTheme(settings.theme);
+    if (settings.mirror_mode) showMirrorBanner();
   } catch {}
   switchView("dashboard");
 })();
+
+function showMirrorBanner() {
+  const bar = document.createElement("div");
+  bar.id = "mirror-banner";
+  bar.style.cssText = "position:sticky;top:0;z-index:25;background:#7c2d12;color:#fff;padding:10px 16px;font-size:0.85rem;text-align:center;";
+  bar.innerHTML = "⚠️ This is a <b>read-only mirror</b>. Anything entered here (new assessments, checklist ticks, Excel uploads) will be lost on the next deploy. Make changes in the app running on your computer and push to GitHub instead.";
+  document.body.prepend(bar);
+}

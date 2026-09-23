@@ -27,21 +27,14 @@ def previous_business_day(value: date) -> date:
     return candidate
 
 
-def adjust_weekend_for_single_day(reminder: date) -> date:
-    """Move Saturday/Sunday reminders to the preceding weekday."""
-    weekday = reminder.weekday()  # Mon=0 ... Sat=5 Sun=6
-    if weekday >= 5:
-        return previous_business_day(reminder)
-    return reminder
-
-
 def schedule_reminder_for_assessment_date(assessment_date: date, duration_type: DurationType) -> date:
-    if duration_type == "single":
-        reminder = assessment_date
-        for _ in range(2):
-            reminder = previous_business_day(reminder)
-        return reminder
-    return assessment_date - timedelta(days=2)
+    # Regardless of duration type, someone has to physically create the portal
+    # schedule on a weekday — so the reminder always lands 2 business days
+    # before the assessment starts, never on a Saturday or Sunday.
+    reminder = assessment_date
+    for _ in range(2):
+        reminder = previous_business_day(reminder)
+    return reminder
 
 
 def results_reminder_for_assessment_date(assessment_date: date) -> date:

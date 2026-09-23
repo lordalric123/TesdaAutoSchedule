@@ -53,6 +53,19 @@ DATA_DIR = resolve_data_dir()
 EXCEL_DIR = DATA_DIR / "excel"
 STATIC_DIR = ROOT / "static"
 
+if os.environ.get("APP_DATA_DIR"):
+    print(f"[startup] Using APP_DATA_DIR={DATA_DIR} (explicit override).", flush=True)
+elif DATA_DIR == PROJECT_DATA_DIR.resolve():
+    print(
+        f"[startup] Using the in-repo data directory ({DATA_DIR}). "
+        "This is correct for the git-authoritative workflow (data committed to GitHub, "
+        "Render redeploys with it baked in). If this deployment is meant to hold its "
+        "own independent data instead, set APP_DATA_DIR to a persistent disk.",
+        flush=True,
+    )
+else:
+    print(f"[startup] Using fallback data directory {DATA_DIR} (in-repo data/ folder not found).", flush=True)
+
 DEFAULT_CENTERS = EXCEL_DIR / "assessment_centers.xlsx"
 DEFAULT_PROVINCE_ASSESSORS = EXCEL_DIR / "competency_assessors.xlsx"
 DEFAULT_REGION_ASSESSORS = EXCEL_DIR / "region_assessors.xlsx"
@@ -500,10 +513,13 @@ def health():
     return jsonify({"ok": True, "today": today().isoformat()})
 
 
+MIRROR_MODE = os.environ.get("MIRROR_MODE", "").strip().lower() in {"1", "true", "yes"}
+
+
 @app.get("/api/settings")
 def get_settings():
     settings = normalize_settings()
-    return jsonify({**settings, **registry.summary(), "theme_presets": THEME_PRESETS})
+    return jsonify({**settings, **registry.summary(), "theme_presets": THEME_PRESETS, "mirror_mode": MIRROR_MODE})
 
 
 @app.post("/api/settings/theme")

@@ -1,0 +1,17 @@
+# App data (assessments.json, representatives.json, settings.json, task_status.json,
+# and the Excel registries under data/excel/) is intentionally NOT ignored here.
+# This repo's git-authoritative workflow treats data/ as the source of truth:
+# staff run the app locally, edit data there, and push — the live Render deployment
+# is a read-only mirror seeded from whatever is committed here. Do not add data/*.json
+# to this file, or the mirror will stop receiving updates.
+data/*.tmp
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS junk
+.DS_Store
+Thumbs.db
