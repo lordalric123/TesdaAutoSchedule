@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parent
 # The bundled/default Excel files shipped with the code — used only to seed a fresh
 # persistent data directory the first time the app runs there. Never written to.
 SEED_EXCEL_DIR = ROOT / "data" / "excel"
+REGISTRY_CACHE_PATH = ROOT / "data" / "registry_cache.json"
 
 # All writable app state (assessments, settings, uploaded Excel files, task checkmarks)
 # lives under DATA_DIR.
@@ -156,6 +157,48 @@ def load_registry() -> None:
     )
 
 
+def build_assessor_history(
+    assessments: list[dict],
+    year: int,
+    month: int | None = None,
+    qualification: str = "",
+    assessor_type: str = "",
+    source: str = "",
+) -> dict:
+    """Compatibility wrapper used by older tests and callers."""
+    month_value = int(month) if month is not None else None
+    ass_type = (assessor_type or source or "").strip()
+    data = build_assessor_rotation(
+        assessments,
+        registry,
+        qualification=qualification,
+        assessor_type=ass_type,
+    )
+    results = []
+    for item in data["rotation"]:
+        if month_value is not None:
+            relevant = [
+                history
+                for history in item.get("history", [])
+                if parse_iso_date(history["date"]).year == year and parse_iso_date(history["date"]).month == month_value
+            ]
+            if not relevant:
+                continue
+        results.append(
+            {
+                "assessor": item["assessor"],
+                "assessor_type": item["assessor_type"],
+                "assessments_conducted": item.get("assessments_conducted", len(item.get("history", []))),
+                "last_assessment_date": item.get("last_assessment_date"),
+            }
+        )
+    if month_value is not None:
+        label = date(year, month_value, 1).strftime("%B %Y")
+    else:
+        label = str(year)
+    return {"period_label": label, "results": results}
+
+
 def unique_dates(pairs: list[dict], key: str = "date") -> list[str]:
     seen: list[str] = []
     for pair in pairs:
@@ -212,20 +255,22 @@ def normalize_assessors(payload: dict, existing: dict | None = None) -> list[dic
 
 def decorate(assessment: dict) -> dict:
     item = dict(assessment)
-    if not item.get("assessors"):
-        item["assessors"] = [
-            {
-                "name": item.get("assessor", ""),
-                "assessor_type": _assessor_type_value(item),
-            }
-        ]
-    item.setdefault("assessor", item["assessors"][0]["name"])
-    item.setdefault("assessor_type", item["assessors"][0]["assessor_type"])
+    assessors = list(item.get("assessors") or [])
+    if not assessors and item.get("assessor"):
+        assessors = [{"name": item.get("assessor", ""), "assessor_type": _assessor_type_value(item)}]
+    item["assessors"] = assessors
+    item["has_assessor"] = bool(assessors)
+    item["assessor"] = assessors[0]["name"] if assessors else ""
+    item["assessor_type"] = assessors[0]["assessor_type"] if assessors else "province"
+    item["assessor_warning"] = "" if item["has_assessor"] else "Warning: no assessor assigned yet."
     item["assessor_type_label"] = "Region-Based" if item["assessor_type"] == "region" else "Province-Based"
-    item["assessors_label"] = "; ".join(
-        f"{a['name']} ({'Region-Based' if a['assessor_type'] == 'region' else 'Province-Based'})"
-        for a in item["assessors"]
-    )
+    if item["has_assessor"]:
+        item["assessors_label"] = "; ".join(
+            f"{a['name']} ({'Region-Based' if a['assessor_type'] == 'region' else 'Province-Based'})"
+            for a in item["assessors"]
+        )
+    else:
+        item["assessors_label"] = "No assessor assigned yet"
     item["date_label"] = format_range(item["start_date"], item["end_date"])
     item["approved_date_list"] = unique_dates(item["approved_dates"])
     item["schedule_reminder_list"] = unique_dates(item["schedule_reminder_dates"])
@@ -250,11 +295,10 @@ def build_assessment(payload: dict, existing: dict | None = None) -> dict:
     representative = (payload.get("tesda_representative") or "").strip()
     if not center or not qualification:
         raise ValueError("Assessment center and qualification are required.")
-    if not assessors:
-        raise ValueError("At least one assessor is required.")
 
     derived = calculate_derived_dates(start, end, duration_type)
     now = datetime.now().isoformat(timespec="seconds")
+    assignee = assessors[0] if assessors else {"name": "", "assessor_type": "province"}
     return {
         "id": existing["id"] if existing else str(uuid.uuid4()),
         "assessment_center": center,
@@ -265,8 +309,8 @@ def build_assessment(payload: dict, existing: dict | None = None) -> dict:
         "pax": pax,
         "assessors": assessors,
         # legacy single-assessor fields kept in sync for any old code/exports that read them
-        "assessor": assessors[0]["name"],
-        "assessor_type": assessors[0]["assessor_type"],
+        "assessor": assignee["name"],
+        "assessor_type": assignee["assessor_type"],
         "tesda_representative": representative,
         "assessment_dates": derived["assessment_dates"],
         "approved_dates": derived["approved_dates"],
