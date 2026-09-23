@@ -1373,60 +1373,6 @@
     "updated_at": "2026-09-21T17:59:10"
   },
   {
-    "id": "e4ad68f9-da90-43e6-aa9b-5b46f3f3f32f",
-    "assessment_center": "ARC TUTORIALS LEARNING SERVICES INC.",
-    "qualification": "Early Childhood Care and Development Services NC III",
-    "duration_type": "continuous",
-    "start_date": "2026-09-26",
-    "end_date": "2026-09-27",
-    "pax": 27,
-    "assessors": [
-      {
-        "name": "Sherry B. Peñaranda",
-        "assessor_type": "region"
-      }
-    ],
-    "assessor": "Sherry B. Peñaranda",
-    "assessor_type": "region",
-    "tesda_representative": "Erwin T. Monte De Ramos",
-    "assessment_dates": [
-      "2026-09-26",
-      "2026-09-27"
-    ],
-    "approved_dates": [
-      {
-        "assessment_date": "2026-09-26",
-        "date": "2026-09-24"
-      },
-      {
-        "assessment_date": "2026-09-27",
-        "date": "2026-09-25"
-      }
-    ],
-    "schedule_reminder_dates": [
-      {
-        "assessment_date": "2026-09-26",
-        "date": "2026-09-24"
-      },
-      {
-        "assessment_date": "2026-09-27",
-        "date": "2026-09-25"
-      }
-    ],
-    "results_reminder_dates": [
-      {
-        "assessment_date": "2026-09-26",
-        "date": "2026-09-27"
-      },
-      {
-        "assessment_date": "2026-09-27",
-        "date": "2026-09-28"
-      }
-    ],
-    "created_at": "2026-09-21T18:00:45",
-    "updated_at": "2026-09-21T18:00:45"
-  },
-  {
     "id": "995035dd-cb83-4a34-a3cb-f9f406d45e88",
     "assessment_center": "ARC TUTORIALS LEARNING SERVICES INC.",
     "qualification": "Early Childhood Care and Development Services NC III",
