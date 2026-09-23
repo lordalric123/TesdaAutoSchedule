@@ -36,6 +36,12 @@ REGISTRY_CACHE_PATH = ROOT / "data" / "registry_cache.json"
 PROJECT_DATA_DIR = ROOT / "data"
 LEGACY_PERSISTENT_DIR = Path.home() / ".tesda_auto_schedule_data"
 
+JSON_REGISTRY_DEFAULTS = {
+    "centers_path": str(PROJECT_DATA_DIR / "assessment_centers.json"),
+    "province_assessors_path": str(PROJECT_DATA_DIR / "competency_assessors.json"),
+    "region_assessors_path": str(PROJECT_DATA_DIR / "region_assessors.json"),
+}
+
 def resolve_data_dir() -> Path:
     env_path = os.environ.get("APP_DATA_DIR")
     if env_path:
@@ -54,9 +60,9 @@ DATA_DIR = resolve_data_dir()
 EXCEL_DIR = DATA_DIR / "excel"
 STATIC_DIR = ROOT / "static"
 
-DEFAULT_CENTERS = EXCEL_DIR / "assessment_centers.xlsx"
-DEFAULT_PROVINCE_ASSESSORS = EXCEL_DIR / "competency_assessors.xlsx"
-DEFAULT_REGION_ASSESSORS = EXCEL_DIR / "region_assessors.xlsx"
+DEFAULT_CENTERS = PROJECT_DATA_DIR / "assessment_centers.json"
+DEFAULT_PROVINCE_ASSESSORS = PROJECT_DATA_DIR / "competency_assessors.json"
+DEFAULT_REGION_ASSESSORS = PROJECT_DATA_DIR / "region_assessors.json"
 DEFAULT_ASSESSORS = DEFAULT_PROVINCE_ASSESSORS
 
 
@@ -137,6 +143,18 @@ def today() -> date:
 
 def normalize_settings(raw: dict | None = None) -> dict:
     settings = dict(raw or settings_store.read())
+
+    def prefer_json_if_available(path_key: str, json_default: str) -> None:
+        current = (settings.get(path_key) or "").strip()
+        if current and current.lower().endswith(".xlsx") and Path(json_default).exists():
+            settings[path_key] = json_default
+        elif not current and Path(json_default).exists():
+            settings[path_key] = json_default
+
+    prefer_json_if_available("centers_path", str(DEFAULT_CENTERS))
+    prefer_json_if_available("province_assessors_path", str(DEFAULT_PROVINCE_ASSESSORS))
+    prefer_json_if_available("region_assessors_path", str(DEFAULT_REGION_ASSESSORS))
+
     if not settings.get("province_assessors_path"):
         settings["province_assessors_path"] = settings.get("assessors_path") or str(DEFAULT_PROVINCE_ASSESSORS)
     settings["assessors_path"] = settings["province_assessors_path"]
