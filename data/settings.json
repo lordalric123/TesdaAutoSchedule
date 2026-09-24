@@ -1,7 +1,7 @@
 {
   "centers_path": "C:\\Users\\OWNER\\Documents\\TesdaAutoSchedule\\data\\excel\\assessment_centers.xlsx",
-  "assessors_path": "C:\\Users\\OWNER\\Documents\\TesdaAutoSchedule\\data\\competency_assessors.json",
-  "province_assessors_path": "C:\\Users\\OWNER\\Documents\\TesdaAutoSchedule\\data\\competency_assessors.json",
+  "assessors_path": "C:\\Users\\OWNER\\Documents\\TesdaAutoSchedule\\data\\excel\\competency_assessors.xlsx",
+  "province_assessors_path": "C:\\Users\\OWNER\\Documents\\TesdaAutoSchedule\\data\\excel\\competency_assessors.xlsx",
   "region_assessors_path": "C:\\Users\\OWNER\\Documents\\TesdaAutoSchedule\\data\\excel\\region_assessors.xlsx",
   "theme": {
     "preset": "dark",

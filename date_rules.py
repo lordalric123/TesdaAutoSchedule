@@ -27,10 +27,19 @@ def previous_business_day(value: date) -> date:
     return candidate
 
 
-def schedule_reminder_for_assessment_date(assessment_date: date, duration_type: DurationType) -> date:
-    # Regardless of duration type, someone has to physically create the portal
-    # schedule on a weekday — so the reminder always lands 2 business days
-    # before the assessment starts, never on a Saturday or Sunday.
+def schedule_reminder_for_assessment_date(
+    assessment_date: date,
+    duration_type: DurationType,
+    range_touches_weekend: bool = False,
+) -> date:
+    if duration_type == "continuous" and range_touches_weekend:
+        # Exception: if the continuous assessment's own date range includes a
+        # Saturday or Sunday, the reminder is a flat 2 calendar days before —
+        # Sat/Sun are counted normally, not skipped.
+        return assessment_date - timedelta(days=2)
+    # Default (single-day assessments, and continuous ones that don't touch
+    # a weekend): the reminder always lands on a business day — 2 business
+    # days before, skipping Sat/Sun entirely.
     reminder = assessment_date
     for _ in range(2):
         reminder = previous_business_day(reminder)
@@ -49,10 +58,11 @@ def calculate_derived_dates(
     if duration_type == "single":
         end = start
     assessment_dates = daterange(start, end)
+    range_touches_weekend = duration_type == "continuous" and any(d.weekday() >= 5 for d in assessment_dates)
     schedule_pairs = [
         {
             "assessment_date": d.isoformat(),
-            "date": schedule_reminder_for_assessment_date(d, duration_type).isoformat(),
+            "date": schedule_reminder_for_assessment_date(d, duration_type, range_touches_weekend).isoformat(),
         }
         for d in assessment_dates
     ]
