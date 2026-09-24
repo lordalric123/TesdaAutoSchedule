@@ -405,10 +405,7 @@ async function renderScheduler(extra) {
     payload.assessors = assessorRows
       .filter((row) => row.assessor)
       .map((row) => ({ name: row.assessor, assessor_type: row.assessor_type }));
-    if (!payload.assessors.length) {
-      toast("Add at least one assessor.", "error");
-      return;
-    }
+    // Assessors are optional — the date can be locked in before anyone is assigned.
     try {
       if (editing) {
         await api(`/api/assessments/${editing.id}`, { method: "PUT", headers: jsonHeaders(), body: JSON.stringify(payload) });
@@ -441,19 +438,26 @@ function jsonHeaders() {
 }
 
 function itemAssessors(item) {
-  return item.assessors && item.assessors.length
-    ? item.assessors
-    : [{ name: item.assessor, assessor_type: item.assessor_type }];
+  if (item.assessors && item.assessors.length) return item.assessors;
+  // Only fall back to the legacy singular fields for old records that never had
+  // an "assessors" array at all. If "assessors" is present but empty, that's a
+  // deliberate "not yet assigned" state and should stay empty, not be misread
+  // as a single assessor with a blank name.
+  if (!item.assessors && item.assessor) return [{ name: item.assessor, assessor_type: item.assessor_type }];
+  return [];
 }
 
 function assessorChipLabel(item) {
   const list = itemAssessors(item);
+  if (!list.length) return "Not yet assigned";
   if (list.length > 1) return `${list.length} Assessors`;
   return list[0].assessor_type === "region" ? "Region-Based" : "Province-Based";
 }
 
 function assessorsSummary(item) {
-  return itemAssessors(item)
+  const list = itemAssessors(item);
+  if (!list.length) return "Not yet assigned";
+  return list
     .map((a) => `${a.name} (${a.assessor_type === "region" ? "Region-Based" : "Province-Based"})`)
     .join("; ");
 }

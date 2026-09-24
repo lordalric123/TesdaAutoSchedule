@@ -127,10 +127,10 @@ registry = ExcelRegistry()
 settings_store = JsonStore(
     DATA_DIR / "settings.json",
     {
-        "centers_path": str(DEFAULT_CENTERS),
-        "province_assessors_path": str(DEFAULT_PROVINCE_ASSESSORS),
-        "region_assessors_path": str(DEFAULT_REGION_ASSESSORS),
-        "assessors_path": str(DEFAULT_PROVINCE_ASSESSORS),
+        "centers_path": DEFAULT_CENTERS.name,
+        "province_assessors_path": DEFAULT_PROVINCE_ASSESSORS.name,
+        "region_assessors_path": DEFAULT_REGION_ASSESSORS.name,
+        "assessors_path": DEFAULT_PROVINCE_ASSESSORS.name,
         "theme": dict(DEFAULT_THEME),
     },
 )
@@ -147,12 +147,33 @@ def today() -> date:
     return date.today()
 
 
+def _filename_only(value: str | None, default: Path) -> str:
+    """settings.json stores just a filename (e.g. 'assessment_centers.xlsx'), resolved
+    against *this* environment's own EXCEL_DIR at load time — never a full path. A full
+    path baked into a committed settings.json would point at one machine's own folder
+    layout (e.g. a Windows path from someone's laptop) and silently fail to resolve on
+    any other machine or deployment, which is why Excel data kept "disappearing" on
+    Render even though the files themselves were committed to git.
+    """
+    value = (value or "").strip()
+    if not value:
+        return default.name
+    # Normalize both Windows ("\") and POSIX ("/") separators regardless of which OS
+    # is running right now — settings.json may have been written on a different OS
+    # than the one reading it, and pathlib.Path on Linux does not treat "\" as a
+    # separator, so a raw Path(...).name would return the whole Windows path intact.
+    normalized = value.replace("\\", "/")
+    name = normalized.rsplit("/", 1)[-1].strip()
+    return name or default.name
+
+
 def normalize_settings(raw: dict | None = None) -> dict:
     settings = dict(raw or settings_store.read())
-    if not settings.get("province_assessors_path"):
-        settings["province_assessors_path"] = settings.get("assessors_path") or str(DEFAULT_PROVINCE_ASSESSORS)
+    settings["centers_path"] = _filename_only(settings.get("centers_path"), DEFAULT_CENTERS)
+    province_source = settings.get("province_assessors_path") or settings.get("assessors_path")
+    settings["province_assessors_path"] = _filename_only(province_source, DEFAULT_PROVINCE_ASSESSORS)
     settings["assessors_path"] = settings["province_assessors_path"]
-    settings.setdefault("region_assessors_path", str(DEFAULT_REGION_ASSESSORS))
+    settings["region_assessors_path"] = _filename_only(settings.get("region_assessors_path"), DEFAULT_REGION_ASSESSORS)
     theme = dict(DEFAULT_THEME)
     theme.update(settings.get("theme") or {})
     settings["theme"] = theme
@@ -163,9 +184,9 @@ def load_registry() -> None:
     settings = normalize_settings()
     settings_store.write(settings)
     registry.load(
-        settings["centers_path"],
-        settings["province_assessors_path"],
-        settings.get("region_assessors_path"),
+        EXCEL_DIR / settings["centers_path"],
+        EXCEL_DIR / settings["province_assessors_path"],
+        EXCEL_DIR / settings.get("region_assessors_path"),
     )
 
 
@@ -192,8 +213,21 @@ def format_range(start: str, end: str) -> str:
 
 def normalize_assessors(payload: dict, existing: dict | None = None) -> list[dict]:
     """Build the assessors list from a payload, tolerating the old single-assessor shape."""
-    raw = payload.get("assessors")
-    if not isinstance(raw, list) or not raw:
+def normalize_assessors(payload: dict, existing: dict | None = None) -> list[dict]:
+    """Build the assessors list from a payload, tolerating the old single-assessor shape.
+
+    An assessors list is optional — an assessment can be scheduled with a date
+    locked in before anyone is assigned. If the payload explicitly includes
+    "assessors" (even as an empty list), that's respected as-is, including
+    clearing out previously-assigned assessors. Only when the key is absent
+    entirely do we fall back to reconstructing from legacy fields / the
+    existing record, for backward compatibility with older callers.
+    """
+    if "assessors" in payload:
+        raw = payload.get("assessors")
+        if not isinstance(raw, list):
+            raw = []
+    else:
         legacy_name = (payload.get("assessor") or "").strip()
         if legacy_name:
             raw = [{"name": legacy_name, "assessor_type": payload.get("assessor_type") or "province"}]
@@ -225,20 +259,25 @@ def normalize_assessors(payload: dict, existing: dict | None = None) -> list[dic
 
 def decorate(assessment: dict) -> dict:
     item = dict(assessment)
-    if not item.get("assessors"):
-        item["assessors"] = [
-            {
-                "name": item.get("assessor", ""),
-                "assessor_type": _assessor_type_value(item),
-            }
-        ]
-    item.setdefault("assessor", item["assessors"][0]["name"])
-    item.setdefault("assessor_type", item["assessors"][0]["assessor_type"])
-    item["assessor_type_label"] = "Region-Based" if item["assessor_type"] == "region" else "Province-Based"
-    item["assessors_label"] = "; ".join(
-        f"{a['name']} ({'Region-Based' if a['assessor_type'] == 'region' else 'Province-Based'})"
-        for a in item["assessors"]
-    )
+    if "assessors" not in item:
+        # Legacy record from before multi-assessor support — migrate in place.
+        legacy_name = item.get("assessor", "")
+        item["assessors"] = (
+            [{"name": legacy_name, "assessor_type": _assessor_type_value(item)}] if legacy_name else []
+        )
+    if item["assessors"]:
+        item.setdefault("assessor", item["assessors"][0]["name"])
+        item.setdefault("assessor_type", item["assessors"][0]["assessor_type"])
+        item["assessor_type_label"] = "Region-Based" if item["assessors"][0]["assessor_type"] == "region" else "Province-Based"
+        item["assessors_label"] = "; ".join(
+            f"{a['name']} ({'Region-Based' if a['assessor_type'] == 'region' else 'Province-Based'})"
+            for a in item["assessors"]
+        )
+    else:
+        item["assessor"] = ""
+        item["assessor_type"] = ""
+        item["assessor_type_label"] = "Not yet assigned"
+        item["assessors_label"] = "Not yet assigned"
     item["date_label"] = format_range(item["start_date"], item["end_date"])
     item["approved_date_list"] = unique_dates(item["approved_dates"])
     item["schedule_reminder_list"] = unique_dates(item["schedule_reminder_dates"])
@@ -259,12 +298,12 @@ def build_assessment(payload: dict, existing: dict | None = None) -> dict:
     pax = int(payload.get("pax") or 0)
     if pax < 1:
         raise ValueError("Number of pax must be at least 1.")
+    # Assessors are optional: a date can be locked in — and its reminder dates
+    # calculated — before anyone has been assigned to conduct it yet.
     assessors = normalize_assessors(payload, existing)
     representative = (payload.get("tesda_representative") or "").strip()
     if not center or not qualification:
         raise ValueError("Assessment center and qualification are required.")
-    if not assessors:
-        raise ValueError("At least one assessor is required.")
 
     derived = calculate_derived_dates(start, end, duration_type)
     now = datetime.now().isoformat(timespec="seconds")
@@ -278,8 +317,8 @@ def build_assessment(payload: dict, existing: dict | None = None) -> dict:
         "pax": pax,
         "assessors": assessors,
         # legacy single-assessor fields kept in sync for any old code/exports that read them
-        "assessor": assessors[0]["name"],
-        "assessor_type": assessors[0]["assessor_type"],
+        "assessor": assessors[0]["name"] if assessors else "",
+        "assessor_type": assessors[0]["assessor_type"] if assessors else "",
         "tesda_representative": representative,
         "assessment_dates": derived["assessment_dates"],
         "approved_dates": derived["approved_dates"],
@@ -584,12 +623,12 @@ def upload_excel():
     uploaded.save(dest)
     settings = normalize_settings()
     if kind == "centers":
-        settings["centers_path"] = str(dest)
+        settings["centers_path"] = dest_name
     elif kind == "region":
-        settings["region_assessors_path"] = str(dest)
+        settings["region_assessors_path"] = dest_name
     else:
-        settings["province_assessors_path"] = str(dest)
-        settings["assessors_path"] = str(dest)
+        settings["province_assessors_path"] = dest_name
+        settings["assessors_path"] = dest_name
     settings_store.write(settings)
     try:
         load_registry()
@@ -954,7 +993,7 @@ def export_backup():
             "excel/competency_assessors.xlsx": settings.get("province_assessors_path") or settings.get("assessors_path"),
             "excel/region_assessors.xlsx": settings.get("region_assessors_path"),
         }.items():
-            path = Path(path_value) if path_value else None
+            path = EXCEL_DIR / path_value if path_value else None
             if path and path.exists():
                 archive.write(path, label)
     buffer.seek(0)
