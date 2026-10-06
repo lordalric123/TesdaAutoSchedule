@@ -30,16 +30,17 @@ def previous_business_day(value: date) -> date:
 def schedule_reminder_for_assessment_date(
     assessment_date: date,
     duration_type: DurationType,
-    range_touches_weekend: bool = False,
+    starts_on_weekend: bool = False,
 ) -> date:
-    if duration_type == "continuous" and range_touches_weekend:
-        # Exception: if the continuous assessment's own date range includes a
-        # Saturday or Sunday, the reminder is a flat 2 calendar days before —
-        # Sat/Sun are counted normally, not skipped.
+    if duration_type == "continuous" and starts_on_weekend:
+        # Exception: a continuous assessment that itself BEGINS on a Saturday
+        # or Sunday counts Sat/Sun normally — flat 2 calendar days before,
+        # no skipping.
         return assessment_date - timedelta(days=2)
-    # Default (single-day assessments, and continuous ones that don't touch
-    # a weekend): the reminder always lands on a business day — 2 business
-    # days before, skipping Sat/Sun entirely.
+    # Default (single-day assessments; continuous assessments that begin on
+    # a weekday, even if the range later runs through a weekend): the
+    # reminder always lands on a business day — 2 business days before,
+    # skipping Sat/Sun entirely.
     reminder = assessment_date
     for _ in range(2):
         reminder = previous_business_day(reminder)
@@ -58,11 +59,15 @@ def calculate_derived_dates(
     if duration_type == "single":
         end = start
     assessment_dates = daterange(start, end)
-    range_touches_weekend = duration_type == "continuous" and any(d.weekday() >= 5 for d in assessment_dates)
+    # Only the START date decides this — a continuous assessment that begins on a
+    # weekday (Mon-Fri) still gets the weekend-skipping rule even if the range later
+    # runs into a Saturday/Sunday. The flat "count the weekend" rule only applies
+    # when the assessment itself begins on a Saturday or Sunday.
+    starts_on_weekend = duration_type == "continuous" and start.weekday() >= 5
     schedule_pairs = [
         {
             "assessment_date": d.isoformat(),
-            "date": schedule_reminder_for_assessment_date(d, duration_type, range_touches_weekend).isoformat(),
+            "date": schedule_reminder_for_assessment_date(d, duration_type, starts_on_weekend).isoformat(),
         }
         for d in assessment_dates
     ]

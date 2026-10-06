@@ -688,6 +688,9 @@ async function renderFinder() {
           ${data.qualification ? `
             <p class="hint">Qualification: <b>${escapeHtml(data.qualification)}</b><br>
             Assessors found: ${data.assessor_count} · Assessment centers found: ${data.center_count}</p>
+            <div class="row-actions" style="margin-bottom:12px">
+              <a class="ghost" style="text-decoration:none" href="/api/finder/export?qualification=${encodeURIComponent(data.qualification)}">Export Assessors to Excel</a>
+            </div>
             <div class="grid two">
               <div>
                 <div class="row-actions" style="margin-bottom:10px">

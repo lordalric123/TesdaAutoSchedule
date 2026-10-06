@@ -17,7 +17,7 @@ from werkzeug.utils import secure_filename
 
 from date_rules import calculate_derived_dates, parse_iso_date
 from excel_loader import ExcelRegistry
-from monitoring_export import build_assessor_history_workbook, build_monitoring_workbook
+from monitoring_export import build_assessor_history_workbook, build_finder_workbook, build_monitoring_workbook
 from storage import JsonStore
 
 ROOT = Path(__file__).resolve().parent
@@ -683,6 +683,24 @@ def finder():
             "assessor_count": len(result["assessors"]),
             "center_count": len(result["centers"]),
         }
+    )
+
+
+@app.get("/api/finder/export")
+def export_finder():
+    qualification = (request.args.get("qualification") or "").strip()
+    if not qualification:
+        return jsonify({"error": "Select a qualification first."}), 400
+    province = registry.assessors(qualification, "province")
+    region = registry.assessors(qualification, "region")
+    buffer = build_finder_workbook(qualification, province, region)
+    stamp = datetime.now().strftime("%Y%m%d")
+    filename = secure_filename(f"Assessors_{qualification}_{stamp}.xlsx") or f"Assessors_{stamp}.xlsx"
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
 
