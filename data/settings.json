@@ -1,0 +1,14 @@
+{
+  "centers_path": "assessment_centers.xlsx",
+  "assessors_path": "competency_assessors.xlsx",
+  "province_assessors_path": "competency_assessors.xlsx",
+  "region_assessors_path": "region_assessors.xlsx",
+  "theme": {
+    "preset": "dark",
+    "primary": "#22d3ee",
+    "secondary": "#67e8f9",
+    "background": "#020617",
+    "text": "#f8fafc",
+    "highlight": "#fbbf24"
+  }
+}

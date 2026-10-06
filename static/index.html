@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TESDA Southern Leyte · Assessment Scheduler</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="rail" id="rail">
+      <div class="brand">
+        <div class="brand-mark">TL</div>
+        <div>
+          <p class="brand-kicker">TESDA Region VIII</p>
+          <h1>Southern Leyte</h1>
+          <p class="brand-sub">Competency Assessment Control</p>
+        </div>
+      </div>
+      <nav class="nav">
+        <button data-view="dashboard" class="active">Dashboard</button>
+        <button data-view="scheduler">Assessment Scheduler</button>
+        <button data-view="calendar">Calendar</button>
+        <button data-view="finder">Qualification Finder</button>
+        <button data-view="history">Assessor History</button>
+        <button data-view="reps">TESDA Representatives</button>
+        <button data-view="reports">Monthly Reports</button>
+        <button data-view="settings">Settings / Data Sources</button>
+      </nav>
+      <div class="rail-foot">
+        <p id="clock-label">Local date</p>
+        <strong id="clock-value">—</strong>
+      </div>
+    </aside>
+
+    <main class="stage">
+      <header class="stage-head">
+        <div class="title-block">
+          <button class="ghost menu-toggle" id="menu-toggle" type="button" aria-label="Open menu">Menu</button>
+          <div>
+            <p class="eyebrow" id="view-eyebrow">Operations</p>
+            <h2 id="view-title">Dashboard</h2>
+          </div>
+        </div>
+        <div class="head-actions">
+          <button class="ghost" id="notify-btn">Enable alerts</button>
+          <button class="primary" id="new-assessment-btn">New assessment</button>
+        </div>
+      </header>
+
+      <section id="view-dashboard" class="view active"></section>
+      <section id="view-scheduler" class="view" hidden></section>
+      <section id="view-calendar" class="view" hidden></section>
+      <section id="view-finder" class="view" hidden></section>
+      <section id="view-history" class="view" hidden></section>
+      <section id="view-reps" class="view" hidden></section>
+      <section id="view-reports" class="view" hidden></section>
+      <section id="view-settings" class="view" hidden></section>
+    </main>
+  </div>
+
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card" id="modal-card"></div>
+  </div>
+
+  <div id="toast-stack" class="toast-stack"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
