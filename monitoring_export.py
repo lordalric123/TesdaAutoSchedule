@@ -91,11 +91,7 @@ def compact_approved_dates(iso_dates: list[str]) -> str:
     return f"{first.month}/{first.day}/{first.year}-{last.month}/{last.day}/{last.year}"
 
 
-def build_monitoring_workbook(year: int, month: int, items: list[dict]) -> BytesIO:
-    month_label = date(year, month, 1).strftime("%B %Y")
-    workbook = Workbook()
-    sheet = workbook.active
-    sheet.title = month_label[:31]
+def _populate_monitoring_sheet(sheet, month_label: str, items: list[dict]) -> None:
     _make_print_ready(sheet, repeat_rows="2:2", paper_size=sheet.PAPERSIZE_LEGAL)
 
     sheet.merge_cells("A1:G1")
@@ -154,6 +150,35 @@ def build_monitoring_workbook(year: int, month: int, items: list[dict]) -> Bytes
     widths = [18, 42, 36, 16, 14, 28, 26]
     for index, width in enumerate(widths, start=1):
         sheet.column_dimensions[get_column_letter(index)].width = width
+
+
+def build_monitoring_workbook(year: int, month: int, items: list[dict]) -> BytesIO:
+    month_label = date(year, month, 1).strftime("%B %Y")
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = month_label[:31]
+    _populate_monitoring_sheet(sheet, month_label, items)
+
+    buffer = BytesIO()
+    workbook.save(buffer)
+    buffer.seek(0)
+    return buffer
+
+
+def build_monitoring_workbook_range(months: list[tuple[int, int, list[dict]]]) -> BytesIO:
+    """Same print-ready layout as build_monitoring_workbook, but one sheet per
+    month, all in a single workbook — for exporting a range of months at once.
+    `months` is a list of (year, month, items) tuples, already in the order the
+    sheets should appear.
+    """
+    workbook = Workbook()
+    first = True
+    for year, month, items in months:
+        month_label = date(year, month, 1).strftime("%B %Y")
+        sheet = workbook.active if first else workbook.create_sheet()
+        first = False
+        sheet.title = month_label[:31]
+        _populate_monitoring_sheet(sheet, month_label, items)
 
     buffer = BytesIO()
     workbook.save(buffer)

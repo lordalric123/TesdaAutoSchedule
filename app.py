@@ -17,7 +17,12 @@ from werkzeug.utils import secure_filename
 
 from date_rules import calculate_derived_dates, parse_iso_date
 from excel_loader import ExcelRegistry
-from monitoring_export import build_assessor_history_workbook, build_finder_workbook, build_monitoring_workbook
+from monitoring_export import (
+    build_assessor_history_workbook,
+    build_finder_workbook,
+    build_monitoring_workbook,
+    build_monitoring_workbook_range,
+)
 from storage import JsonStore
 
 ROOT = Path(__file__).resolve().parent
@@ -496,6 +501,8 @@ def calendar_events(calendar_type: str, year: int, month: int) -> dict[str, list
                             "title": "Create portal schedule",
                             "detail": f"Create portal schedule for {format_range(pair['assessment_date'], pair['assessment_date'])}.",
                             "assessment": item,
+                            "assessment_date": pair["assessment_date"],
+                            "date": event_date,
                             "task_id": tid,
                             "done": bool(statuses.get(tid, {}).get("done")),
                         }
@@ -511,6 +518,8 @@ def calendar_events(calendar_type: str, year: int, month: int) -> dict[str, list
                             "title": "Results reminder",
                             "detail": f"Show/submit results for the assessment conducted on {format_range(pair['assessment_date'], pair['assessment_date'])}.",
                             "assessment": item,
+                            "assessment_date": pair["assessment_date"],
+                            "date": event_date,
                             "task_id": tid,
                             "done": bool(statuses.get(tid, {}).get("done")),
                         }
@@ -529,6 +538,7 @@ def calendar_events(calendar_type: str, year: int, month: int) -> dict[str, list
                                 "title": item["qualification"],
                                 "detail": item["date_label"],
                                 "assessment": item,
+                                "assessment_date": item["start_date"],
                                 "range_id": item["id"],
                                 "task_id": tid,
                                 "done": done,
@@ -590,6 +600,33 @@ def reset_theme():
     settings["theme"] = dict(DEFAULT_THEME)
     settings_store.write(settings)
     return jsonify({"ok": True, "theme": settings["theme"]})
+
+
+@app.post("/api/assessments/recalculate-dates")
+def recalculate_dates():
+    """Re-run calculate_derived_dates for every stored assessment using the
+    current date_rules.py logic, and save the results. Needed whenever the
+    scheduling rules themselves change — dates are computed once at
+    create/edit time and stored, so a rule fix alone doesn't touch assessments
+    that already existed before the fix.
+    """
+    items = assessments_store.read()
+    changed = 0
+    for item in items:
+        start = parse_iso_date(item["start_date"])
+        end = parse_iso_date(item["end_date"])
+        derived = calculate_derived_dates(start, end, item["duration_type"])
+        if (
+            item.get("approved_dates") != derived["approved_dates"]
+            or item.get("results_reminder_dates") != derived["results_reminder_dates"]
+        ):
+            changed += 1
+        item["assessment_dates"] = derived["assessment_dates"]
+        item["approved_dates"] = derived["approved_dates"]
+        item["schedule_reminder_dates"] = derived["schedule_reminder_dates"]
+        item["results_reminder_dates"] = derived["results_reminder_dates"]
+    assessments_store.write(items)
+    return jsonify({"ok": True, "total": len(items), "changed": changed})
 
 
 @app.post("/api/settings/reload")
@@ -790,6 +827,36 @@ def update_assessment(assessment_id: str):
     return jsonify(decorate(item))
 
 
+@app.post("/api/assessments/<assessment_id>/quick-update")
+def quick_update_assessment(assessment_id: str):
+    """Lightweight update for just the assessor(s) and/or TESDA representative —
+    used by the compact task cards on the Dashboard and Calendar so filling in an
+    assessor doesn't require opening the full Scheduler form. Unlike the PUT route,
+    this never touches dates/center/qualification, so there's nothing to re-validate.
+    """
+    payload = request.get_json(force=True) or {}
+    items = assessments_store.read()
+    existing = next((row for row in items if row["id"] == assessment_id), None)
+    if not existing:
+        return jsonify({"error": "Assessment not found."}), 404
+
+    if "assessors" in payload:
+        try:
+            assessors = normalize_assessors({"assessors": payload["assessors"]})
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        existing["assessors"] = assessors
+        existing["assessor"] = assessors[0]["name"] if assessors else ""
+        existing["assessor_type"] = assessors[0]["assessor_type"] if assessors else ""
+
+    if "tesda_representative" in payload:
+        existing["tesda_representative"] = (payload.get("tesda_representative") or "").strip()
+
+    existing["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    assessments_store.write(items)
+    return jsonify(decorate(existing))
+
+
 @app.delete("/api/assessments/<assessment_id>")
 def delete_assessment(assessment_id: str):
     items = [row for row in assessments_store.read() if row["id"] != assessment_id]
@@ -968,14 +1035,64 @@ def assessor_rotation():
     return jsonify(data)
 
 
+def _parse_year_month(value: str) -> tuple[int, int]:
+    year_str, month_str = value.strip().split("-", 1)
+    year, month = int(year_str), int(month_str)
+    if month not in range(1, 13):
+        raise ValueError("Month must be 1-12.")
+    return year, month
+
+
+def _month_sequence(start: tuple[int, int], end: tuple[int, int]) -> list[tuple[int, int]]:
+    if start > end:
+        raise ValueError("End month must be on or after the start month.")
+    months = []
+    year, month = start
+    while (year, month) <= end:
+        months.append((year, month))
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+        if len(months) > 36:
+            raise ValueError("Range is too large (36 months max).")
+    return months
+
+
 @app.get("/api/reports/export")
 def export_reports():
-    year = int(request.args.get("year", today().year))
-    month = int(request.args.get("month", today().month))
-    items = [decorate(item) for item in assessments_store.read() if overlaps_month(item, year, month)]
-    items.sort(key=lambda x: x["start_date"])
-    buffer = build_monitoring_workbook(year, month, items)
-    filename = f"Assessment_Schedule_{date(year, month, 1).strftime('%B_%Y')}.xlsx"
+    start_param = request.args.get("start")
+    end_param = request.args.get("end")
+
+    if start_param and end_param:
+        try:
+            months = _month_sequence(_parse_year_month(start_param), _parse_year_month(end_param))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        all_assessments = assessments_store.read()
+        month_payload = []
+        for year, month in months:
+            items = [decorate(item) for item in all_assessments if overlaps_month(item, year, month)]
+            items.sort(key=lambda x: x["start_date"])
+            month_payload.append((year, month, items))
+
+        buffer = build_monitoring_workbook_range(month_payload)
+        start_label = date(*months[0], 1).strftime("%B_%Y")
+        end_label = date(*months[-1], 1).strftime("%B_%Y")
+        filename = (
+            f"Assessment_Schedule_{start_label}.xlsx"
+            if start_label == end_label
+            else f"Assessment_Schedule_{start_label}_to_{end_label}.xlsx"
+        )
+    else:
+        year = int(request.args.get("year", today().year))
+        month = int(request.args.get("month", today().month))
+        items = [decorate(item) for item in assessments_store.read() if overlaps_month(item, year, month)]
+        items.sort(key=lambda x: x["start_date"])
+        buffer = build_monitoring_workbook(year, month, items)
+        filename = f"Assessment_Schedule_{date(year, month, 1).strftime('%B_%Y')}.xlsx"
+
     return send_file(
         buffer,
         as_attachment=True,

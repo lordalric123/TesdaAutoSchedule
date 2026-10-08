@@ -10,6 +10,7 @@ const state = {
   theme: null,
   editingId: null,
   prefill: null,
+  expandedTasks: new Set(),
 };
 
 const titles = {
@@ -111,6 +112,21 @@ async function refreshLookups() {
   state.centers = await api("/api/centers");
   state.representatives = await api("/api/representatives");
   state.assessments = await api("/api/assessments");
+  updateRepDatalist();
+}
+
+// A single persistent <datalist>, kept in sync whenever representatives are
+// (re)loaded, so every inline TESDA-rep input across the app (Dashboard task
+// cards, Calendar day modal, Scheduler form) can share one "rep-options-inline"
+// id without ever having two of the same id in the DOM at once.
+function updateRepDatalist() {
+  let list = document.getElementById("rep-options-inline");
+  if (!list) {
+    list = document.createElement("datalist");
+    list.id = "rep-options-inline";
+    document.body.appendChild(list);
+  }
+  list.innerHTML = state.representatives.map((r) => `<option value="${escapeHtml(r.name)}"></option>`).join("");
 }
 
 function switchView(view, extra) {
@@ -145,27 +161,264 @@ async function render(extra) {
   }
 }
 
-function taskChecklist(items, kind) {
-  if (!items.length) return `<p class="empty">Nothing due in this group.</p>`;
-  return items.map((item) => {
-    const a = item.assessment || item;
-    const detail = kind === "schedule"
-      ? `Create portal schedule for ${fmt(item.assessment_date)}`
-      : kind === "results"
-        ? `Submit results for ${fmt(item.assessment_date)}`
-        : a.date_label;
-    return `<div class="task ${item.done ? "task-done" : ""}">
-      <label class="task-check">
-        <input type="checkbox" data-dash-task-id="${escapeHtml(item.task_id)}" ${item.done ? "checked" : ""} />
-        <b>${escapeHtml(detail)}</b>
-      </label>
-      <span>${escapeHtml(a.assessment_center)} · ${escapeHtml(a.qualification)}</span>
-    </div>`;
-  }).join("");
+// ---- Shared compact task-card component (Dashboard + Calendar day view) ----
+
+function fmtShort(iso) {
+  if (!iso) return "—";
+  const d = new Date(`${iso}T00:00:00`);
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+const assessorOptionsCache = {};
+async function getAssessorOptions(qualification) {
+  if (!assessorOptionsCache[qualification]) {
+    const q = `&qualification=${encodeURIComponent(qualification)}`;
+    const [province, region] = await Promise.all([
+      api(`/api/assessors?source=province${q}`),
+      api(`/api/assessors?source=region${q}`),
+    ]);
+    assessorOptionsCache[qualification] = { province: province.assessors, region: region.assessors };
+  }
+  return assessorOptionsCache[qualification];
+}
+
+// Normalizes a dashboard item or a calendar event into one consistent shape.
+function taskCardModel(raw, kind) {
+  if (kind === "assessment") {
+    const a = raw.assessment || raw;
+    return {
+      taskId: raw.task_id,
+      done: !!raw.done,
+      kind: "assessment",
+      scheduleByDate: null,
+      assessmentDate: raw.assessment_date || a.start_date,
+      assessmentDateLabel: a.date_label,
+      qualification: a.qualification,
+      assessmentCenter: a.assessment_center,
+      pax: a.pax,
+      assessors: a.assessors || [],
+      tesdaRepresentative: a.tesda_representative || "",
+      assessmentId: a.id,
+    };
+  }
+  const a = raw.assessment;
+  return {
+    taskId: raw.task_id,
+    done: !!raw.done,
+    kind,
+    scheduleByDate: raw.date || null,
+    assessmentDate: raw.assessment_date,
+    assessmentDateLabel: fmt(raw.assessment_date),
+    qualification: a.qualification,
+    assessmentCenter: a.assessment_center,
+    pax: a.pax,
+    assessors: a.assessors || [],
+    tesdaRepresentative: a.tesda_representative || "",
+    assessmentId: a.id,
+  };
+}
+
+const KIND_LABEL = { schedule: "Schedule", results: "Results", assessment: "Assessment" };
+const KIND_CLASS = { schedule: "", results: "rose", assessment: "gold" };
+
+function renderTaskCard(m) {
+  const expanded = state.expandedTasks.has(m.taskId);
+  const dateLine = m.kind === "assessment"
+    ? fmtShort(m.assessmentDate)
+    : `${fmtShort(m.scheduleByDate)} → ${fmtShort(m.assessmentDate)}`;
+  const assessorNames = m.assessors.length ? m.assessors.map((a) => a.name).join(", ") : "Unassigned";
+
+  const body = !expanded ? "" : `
+    <div class="task-card-body">
+      ${m.kind !== "assessment" ? `<div class="task-detail-row"><span class="task-detail-label">Create schedule by</span><span>${escapeHtml(fmt(m.scheduleByDate))}</span></div>` : ""}
+      <div class="task-detail-row"><span class="task-detail-label">${m.kind === "assessment" ? "Assessment date" : "For assessment on"}</span><span>${escapeHtml(m.assessmentDateLabel || fmt(m.assessmentDate))}</span></div>
+      <div class="task-detail-row"><span class="task-detail-label">Center</span><span>${escapeHtml(m.assessmentCenter || "—")} · ${m.pax || 0} pax</span></div>
+      <div class="task-detail-row">
+        <span class="task-detail-label">Assessor(s)</span>
+        <span class="task-chip-list">
+          ${m.assessors.map((a) => `<span class="chip">${escapeHtml(a.name)} <small class="muted">(${a.assessor_type === "region" ? "Region" : "Province"})</small></span>`).join("")}
+          <button type="button" class="linkish" data-toggle-add-assessor="${escapeHtml(m.taskId)}">+ Add assessor</button>
+        </span>
+        <div class="assessor-add-form" data-assessor-form="${escapeHtml(m.taskId)}" hidden>
+          <select class="inline-type-select" data-inline-type="${escapeHtml(m.taskId)}">
+            <option value="province">Province-Based</option>
+            <option value="region">Region-Based</option>
+          </select>
+          <select class="inline-assessor-select" data-inline-assessor="${escapeHtml(m.taskId)}">
+            <option value="">Loading…</option>
+          </select>
+          <button type="button" class="ghost" data-save-assessor="${escapeHtml(m.taskId)}" data-assessment-id="${escapeHtml(m.assessmentId)}" data-qualification="${escapeHtml(m.qualification)}">Add</button>
+        </div>
+      </div>
+      <div class="task-detail-row">
+        <span class="task-detail-label">TESDA Rep</span>
+        <span class="task-rep-edit">
+          <input type="text" list="rep-options-inline" placeholder="Not set" value="${escapeHtml(m.tesdaRepresentative)}" data-rep-input="${escapeHtml(m.taskId)}" />
+          <button type="button" class="ghost" data-save-rep="${escapeHtml(m.taskId)}" data-assessment-id="${escapeHtml(m.assessmentId)}">Save</button>
+        </span>
+      </div>
+      <div class="row-actions" style="margin-top:8px">
+        <button type="button" class="ghost" data-open-assessment="${escapeHtml(m.assessmentId)}">View / edit assessment</button>
+      </div>
+    </div>
+  `;
+
+  return `
+    <div class="task-card ${m.done ? "task-card-done" : ""}" data-qualification-preload="${escapeHtml(m.qualification)}">
+      <div class="task-card-head">
+        <input type="checkbox" data-task-toggle="${escapeHtml(m.taskId)}" ${m.done ? "checked" : ""} />
+        <span class="chip ${KIND_CLASS[m.kind]}" style="flex:none">${KIND_LABEL[m.kind]}</span>
+        <div class="task-card-summary" data-task-expand-toggle="${escapeHtml(m.taskId)}">
+          <b>${escapeHtml(m.qualification)}</b>
+          <span class="muted">${dateLine} · ${escapeHtml(assessorNames)}</span>
+        </div>
+        <button type="button" class="ghost task-chevron" data-task-expand-toggle="${escapeHtml(m.taskId)}">${expanded ? "▲" : "▼"}</button>
+      </div>
+      ${body}
+    </div>
+  `;
+}
+
+function renderTaskCardGroup(models, emptyMessage) {
+  if (!models.length) return `<p class="empty">${escapeHtml(emptyMessage || "Nothing here.")}</p>`;
+  return `<div class="task-card-list">${models.map(renderTaskCard).join("")}</div>`;
+}
+
+// Wires every task card's interactive bits inside `container`. `refresh` is called
+// after any successful change (toggle, add assessor, save rep) so the caller can
+// re-fetch its own data; expand/collapse state survives because it's tracked by
+// task_id in state.expandedTasks, not by DOM node.
+function bindTaskCards(container, refresh) {
+  container.querySelectorAll("[data-task-toggle]").forEach((box) => {
+    box.addEventListener("change", async () => {
+      const taskId = box.dataset.taskToggle;
+      const done = box.checked;
+      try {
+        await api("/api/tasks/toggle", { method: "POST", headers: jsonHeaders(), body: JSON.stringify({ task_id: taskId, done }) });
+      } catch (err) {
+        toast(err.message, "error");
+        box.checked = !done;
+        return;
+      }
+      toast(done ? "Marked as done." : "Marked as not done.");
+      refresh();
+    });
+  });
+
+  container.querySelectorAll("[data-task-expand-toggle]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const taskId = el.dataset.taskExpandToggle;
+      if (state.expandedTasks.has(taskId)) state.expandedTasks.delete(taskId);
+      else state.expandedTasks.add(taskId);
+      refresh();
+    });
+  });
+
+  container.querySelectorAll("[data-open-assessment]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      closeModal();
+      state.editingId = btn.dataset.openAssessment;
+      switchView("scheduler");
+    });
+  });
+
+  container.querySelectorAll("[data-toggle-add-assessor]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const taskId = btn.dataset.toggleAddAssessor;
+      const form = container.querySelector(`[data-assessor-form="${CSS.escape(taskId)}"]`);
+      if (!form) return;
+      form.hidden = !form.hidden;
+      if (!form.hidden) await populateInlineAssessorSelect(container, taskId);
+    });
+  });
+
+  container.querySelectorAll("[data-inline-type]").forEach((sel) => {
+    sel.addEventListener("change", () => populateInlineAssessorSelect(container, sel.dataset.inlineType));
+  });
+
+  container.querySelectorAll("[data-save-assessor]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const taskId = btn.dataset.saveAssessor;
+      const assessmentId = btn.dataset.assessmentId;
+      const typeSel = container.querySelector(`[data-inline-type="${CSS.escape(taskId)}"]`);
+      const nameSel = container.querySelector(`[data-inline-assessor="${CSS.escape(taskId)}"]`);
+      if (!nameSel || !nameSel.value) {
+        toast("Pick an assessor first.", "error");
+        return;
+      }
+      const model = findCardModel(taskId);
+      const nextAssessors = [...(model ? model.assessors : []), { name: nameSel.value, assessor_type: typeSel.value }];
+      try {
+        await api(`/api/assessments/${assessmentId}/quick-update`, {
+          method: "POST",
+          headers: jsonHeaders(),
+          body: JSON.stringify({ assessors: nextAssessors }),
+        });
+      } catch (err) {
+        toast(err.message, "error");
+        return;
+      }
+      toast("Assessor added.");
+      refresh();
+    });
+  });
+
+  container.querySelectorAll("[data-save-rep]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const taskId = btn.dataset.saveRep;
+      const assessmentId = btn.dataset.assessmentId;
+      const input = container.querySelector(`[data-rep-input="${CSS.escape(taskId)}"]`);
+      try {
+        await api(`/api/assessments/${assessmentId}/quick-update`, {
+          method: "POST",
+          headers: jsonHeaders(),
+          body: JSON.stringify({ tesda_representative: input ? input.value : "" }),
+        });
+      } catch (err) {
+        toast(err.message, "error");
+        return;
+      }
+      toast("TESDA representative saved.");
+      refresh();
+    });
+  });
+}
+
+// Tracks the models from the most recent render so the "Add assessor" handler can
+// read a card's current assessor list without re-parsing the DOM.
+let lastRenderedCardModels = {};
+function findCardModel(taskId) {
+  return lastRenderedCardModels[taskId] || null;
+}
+function trackCardModels(models) {
+  models.forEach((m) => { lastRenderedCardModels[m.taskId] = m; });
+}
+
+async function populateInlineAssessorSelect(container, taskId) {
+  const model = findCardModel(taskId);
+  if (!model) return;
+  const typeSel = container.querySelector(`[data-inline-type="${CSS.escape(taskId)}"]`);
+  const nameSel = container.querySelector(`[data-inline-assessor="${CSS.escape(taskId)}"]`);
+  if (!typeSel || !nameSel) return;
+  nameSel.innerHTML = `<option value="">Loading…</option>`;
+  try {
+    const options = await getAssessorOptions(model.qualification);
+    const list = options[typeSel.value] || [];
+    nameSel.innerHTML = `<option value="">Select assessor</option>${optionList(list)}`;
+  } catch {
+    nameSel.innerHTML = `<option value="">Could not load assessors</option>`;
+  }
 }
 
 async function renderDashboard() {
+  await refreshLookups();
   const data = await api("/api/dashboard");
+
+  const scheduleModels = data.schedule_today.map((raw) => taskCardModel(raw, "schedule"));
+  const resultsModels = data.results_today.map((raw) => taskCardModel(raw, "results"));
+  const todayModels = data.assessments_today.map((raw) => taskCardModel(raw, "assessment"));
+  const upcomingModels = data.upcoming.map((raw) => taskCardModel(raw, "assessment"));
+  trackCardModels([...scheduleModels, ...resultsModels, ...todayModels, ...upcomingModels]);
 
   $("view-dashboard").innerHTML = `
     <div class="grid stats">
@@ -177,33 +430,17 @@ async function renderDashboard() {
     <div class="grid two" style="margin-top:16px">
       <div class="card">
         <h3>Today's tasks</h3>
-        <p class="hint">Portal schedule reminders and results due ${fmt(data.today)}. Check them off once done.</p>
-        ${taskChecklist(data.schedule_today, "schedule")}
-        ${taskChecklist(data.results_today, "results")}
+        ${renderTaskCardGroup([...scheduleModels, ...resultsModels], "Nothing due today.")}
       </div>
       <div class="card">
         <h3>Today's assessments</h3>
-        ${taskChecklist(data.assessments_today, "assessment")}
+        ${renderTaskCardGroup(todayModels, "No assessments today.")}
         <h3 style="margin-top:18px">Upcoming</h3>
-        ${taskChecklist(data.upcoming, "assessment")}
+        ${renderTaskCardGroup(upcomingModels, "Nothing upcoming.")}
       </div>
     </div>
   `;
-  document.querySelectorAll("[data-dash-task-id]").forEach((box) => {
-    box.addEventListener("change", async () => {
-      const taskIdValue = box.dataset.dashTaskId;
-      const wasChecked = box.checked;
-      try {
-        await api("/api/tasks/toggle", { method: "POST", headers: jsonHeaders(), body: JSON.stringify({ task_id: taskIdValue, done: wasChecked }) });
-      } catch (err) {
-        toast(err.message, "error");
-        box.checked = !wasChecked;
-        return;
-      }
-      toast(wasChecked ? "Marked as done." : "Marked as not done.");
-      renderDashboard();
-    });
-  });
+  bindTaskCards($("view-dashboard"), renderDashboard);
   maybeNotify(data);
 }
 
@@ -531,6 +768,7 @@ function bindRecordButtons() {
 }
 
 async function renderCalendar() {
+  if (!state.representatives.length) await refreshLookups();
   const { type, year, month } = state.calendar;
   const payload = await api(`/api/calendar?type=${type}&year=${year}&month=${month}`);
   state.calendar.payload = payload;
@@ -604,64 +842,48 @@ function showDay(iso) {
     return;
   }
   const uniqueAssessments = [];
-  const pendingCount = events.filter((e) => !e.done).length;
-  const blocks = events.map((event) => {
-    if (event.kind === "assessment" && uniqueAssessments.includes(event.assessment.id)) return "";
-    if (event.kind === "assessment") uniqueAssessments.push(event.assessment.id);
-    const icon = event.kind === "approved" ? "Approved Date" : event.kind === "results" ? "Results Reminder" : "Assessment";
-    const a = event.assessment;
-    return `<div class="event-block ${event.done ? "event-done" : ""}">
-      <label class="task-check">
-        <input type="checkbox" data-task-id="${escapeHtml(event.task_id)}" ${event.done ? "checked" : ""} />
-        <span class="chip ${event.kind === "results" ? "rose" : event.kind === "assessment" ? "gold" : ""}">${icon}</span>
-        ${event.done ? `<span class="chip" style="background:rgba(74,222,128,0.15);color:var(--ok)">Done</span>` : ""}
-      </label>
-      <h3 style="margin-top:8px">${escapeHtml(event.title)}</h3>
-      <p>${escapeHtml(event.detail)}</p>
-      <p class="muted">${escapeHtml(a.assessment_center)} · ${escapeHtml(a.qualification)} · ${escapeHtml(a.date_label)}</p>
-      <button class="ghost" data-open="${a.id}">View / edit assessment</button>
-    </div>`;
-  }).join("");
+  const models = [];
+  events.forEach((event) => {
+    if (event.kind === "assessment") {
+      if (uniqueAssessments.includes(event.assessment.id)) return;
+      uniqueAssessments.push(event.assessment.id);
+      models.push(taskCardModel(event, "assessment"));
+    } else {
+      models.push(taskCardModel(event, event.kind === "approved" ? "schedule" : "results"));
+    }
+  });
+  trackCardModels(models);
+  const pendingCount = models.filter((m) => !m.done).length;
+
   openModal(`
     <div class="modal-head">
-      <div><p class="eyebrow">${iso} — ${pendingCount === 0 ? "All done" : `${pendingCount} pending`}</p><h2>${fmt(iso)} — ${events.length} ${events.length === 1 ? "Task" : "Tasks"}</h2></div>
+      <div><p class="eyebrow">${iso} — ${pendingCount === 0 ? "All done" : `${pendingCount} pending`}</p><h2>${fmt(iso)} — ${models.length} ${models.length === 1 ? "Task" : "Tasks"}</h2></div>
       <button class="ghost" id="close-modal">Close</button>
     </div>
-    ${blocks}
+    ${renderTaskCardGroup(models)}
   `);
   $("close-modal").onclick = closeModal;
-  document.querySelectorAll("[data-task-id]").forEach((box) => {
-    box.addEventListener("change", () => toggleTask(box.dataset.taskId, box.checked, iso));
-  });
-  document.querySelectorAll("[data-open]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      closeModal();
-      state.editingId = btn.dataset.open;
-      switchView("scheduler");
-    });
+  bindTaskCards($("modal-card"), async () => {
+    await refreshCalendarCounts(iso);
+    showDay(iso);
   });
 }
 
-async function toggleTask(taskId, done, iso) {
-  try {
-    await api("/api/tasks/toggle", { method: "POST", headers: jsonHeaders(), body: JSON.stringify({ task_id: taskId, done }) });
-  } catch (err) {
-    toast(err.message, "error");
-    return;
-  }
-  const events = state.calendar.payload?.events?.[iso] || [];
-  events.forEach((ev) => { if (ev.task_id === taskId) ev.done = done; });
-  const compact = state.calendar.payload?.compact?.[iso];
-  const pending = events.filter((ev) => !ev.done).length;
-  if (compact) compact.pending = pending;
+// After a task card mutation inside the day modal, refresh just this day's bucket
+// from the server (so done/assessor/rep state is current) and patch the month
+// grid's pending count for that day, without a full calendar re-render.
+async function refreshCalendarCounts(iso) {
+  const { type, year, month } = state.calendar;
+  const payload = await api(`/api/calendar?type=${type}&year=${year}&month=${month}`);
+  state.calendar.payload = payload;
+  const info = payload.compact[iso];
   const dayBtn = document.querySelector(`.day[data-day="${iso}"]`);
   const alertEl = dayBtn?.querySelector(".day-alert");
-  if (alertEl) {
-    alertEl.textContent = pending === 0 ? `${events.length} done ✓` : `${pending} pending`;
-    alertEl.classList.toggle("day-alert-done", pending === 0);
+  if (alertEl && info) {
+    const allDone = info.pending === 0;
+    alertEl.textContent = allDone ? `${info.count} done ✓` : `${info.pending} pending`;
+    alertEl.classList.toggle("day-alert-done", allDone);
   }
-  toast(done ? "Marked as done." : "Marked as not done.");
-  showDay(iso);
 }
 
 async function renderFinder() {
@@ -994,9 +1216,18 @@ async function renderReports() {
         <select id="rep-month">${monthNames.map((name, i) => `<option value="${i+1}" ${i+1===month?"selected":""}>${name}</option>`).join("")}</select>
         <input id="rep-year" type="number" value="${year}" style="width:110px" />
         <input id="rep-q" placeholder="Search center, qualification, assessor" value="${escapeHtml(q)}" />
-        <a class="primary" href="/api/reports/export?year=${year}&month=${month}" style="text-decoration:none">Export Assessment Schedule</a>
+        <a class="primary" href="/api/reports/export?year=${year}&month=${month}" style="text-decoration:none">Export This Month</a>
       </div>
-      <p class="hint">${data.items.length} assessment${data.items.length === 1 ? "" : "s"} in ${monthNames[month-1]} ${year}. Export uses the simplified Assessment Monitoring layout.</p>
+      <div class="toolbar" style="margin-top:-6px">
+        <label class="muted" style="text-transform:none;letter-spacing:0">Export a range of months:</label>
+        <select id="range-start-month">${monthNames.map((name, i) => `<option value="${i + 1}" ${i + 1 === month ? "selected" : ""}>${name}</option>`).join("")}</select>
+        <input id="range-start-year" type="number" value="${year}" style="width:90px" />
+        <span class="muted">to</span>
+        <select id="range-end-month">${monthNames.map((name, i) => `<option value="${i + 1}" ${i + 1 === month ? "selected" : ""}>${name}</option>`).join("")}</select>
+        <input id="range-end-year" type="number" value="${year}" style="width:90px" />
+        <a class="ghost" id="range-export-link" style="text-decoration:none" href="#">Export Range</a>
+      </div>
+      <p class="hint">${data.items.length} assessment${data.items.length === 1 ? "" : "s"} in ${monthNames[month-1]} ${year}. Exports use the print-ready Assessment Monitoring layout — a range exports one sheet per month in a single file.</p>
       <div class="table-wrap desktop-table">${assessmentTable(data.items)}</div>
       <div class="mobile-records">${assessmentCards(data.items)}</div>
     </div>
@@ -1010,6 +1241,19 @@ async function renderReports() {
   $("rep-month").onchange = apply;
   $("rep-year").onchange = apply;
   $("rep-q").addEventListener("input", debounce(apply, 250));
+
+  const updateRangeLink = () => {
+    const sm = String($("range-start-month").value).padStart(2, "0");
+    const sy = $("range-start-year").value;
+    const em = String($("range-end-month").value).padStart(2, "0");
+    const ey = $("range-end-year").value;
+    $("range-export-link").href = `/api/reports/export?start=${sy}-${sm}&end=${ey}-${em}`;
+  };
+  ["range-start-month", "range-start-year", "range-end-month", "range-end-year"].forEach((id) => {
+    $(id).addEventListener("change", updateRangeLink);
+  });
+  updateRangeLink();
+
   bindRecordButtons();
 }
 
@@ -1079,9 +1323,13 @@ async function renderSettings() {
       </div>
       <div class="card">
         <h3>Reminder rules</h3>
-        <p>Single-day portal schedule = assessment date minus 2 days, with weekend adjustment to the preceding weekday.</p>
-        <p>Continuous assessments keep exactly minus 2 calendar days, including Saturday and Sunday.</p>
+        <p>Portal schedule reminder = assessment date minus 2 days. If that lands on a weekend, it's pushed back 2 more days so it always falls on a weekday.</p>
+        <p>Exception: a continuous (multi-day) assessment whose range runs into a Saturday or Sunday counts the weekend normally (no push-back) — <i>unless</i> it begins on a Monday or Tuesday, in which case the weekday-only rule still applies.</p>
         <p>Results reminders are generated for every assessment date plus one day.</p>
+        <div class="row-actions" style="margin-top:14px">
+          <button class="ghost" id="recalc-dates">Recalculate all assessment dates</button>
+        </div>
+        <p class="muted" style="margin-top:8px">Run this once after a scheduling-rule change — it re-applies the current rules to every existing assessment. New assessments always use the current rules automatically; this only matters for ones created before a rule change.</p>
       </div>
     </div>
   `;
@@ -1120,6 +1368,15 @@ async function renderSettings() {
       await api("/api/settings/reload", { method: "POST" });
       toast("Excel data reloaded.");
       await renderSettings();
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  };
+  $("recalc-dates").onclick = async () => {
+    if (!confirm("Recalculate approved/schedule/results dates for every existing assessment using the current rules? This cannot be undone.")) return;
+    try {
+      const result = await api("/api/assessments/recalculate-dates", { method: "POST" });
+      toast(`Recalculated ${result.total} assessments — ${result.changed} had date changes.`);
     } catch (err) {
       toast(err.message, "error");
     }

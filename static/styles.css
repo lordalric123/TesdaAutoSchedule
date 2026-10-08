@@ -252,6 +252,84 @@ th { color: var(--gold); font-weight: 500; font-size: 0.75rem; letter-spacing: 0
 .event-block.event-done { opacity: 0.6; }
 .event-block.event-done h3 { text-decoration: line-through; text-decoration-color: var(--muted); }
 
+/* Compact expandable task cards (Dashboard + Calendar day view) */
+.task-card-list { display: flex; flex-direction: column; gap: 8px; }
+.task-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--input-bg);
+  overflow: hidden;
+}
+.task-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+}
+.task-card-head input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--ok);
+  cursor: pointer;
+  flex: none;
+}
+.task-card-summary {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  cursor: pointer;
+}
+.task-card-summary b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-card-summary .muted { font-size: 0.78rem; }
+.task-chevron {
+  flex: none;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  line-height: 1;
+}
+.task-card-done .task-card-summary { opacity: 0.5; }
+.task-card-done .task-card-summary b { text-decoration: line-through; text-decoration-color: var(--muted); }
+
+.task-card-body {
+  padding: 4px 14px 14px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.task-detail-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.88rem;
+  padding-top: 8px;
+}
+.task-detail-label {
+  color: var(--muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  min-width: 140px;
+}
+.task-chip-list { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.assessor-add-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  width: 100%;
+}
+.assessor-add-form select { flex: 1; min-width: 140px; }
+.task-rep-edit { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; }
+.task-rep-edit input { flex: 1; min-width: 160px; }
+
 .finder-list { display: flex; flex-direction: column; gap: 10px; }
 .pick {
   border: 1px solid var(--line);
