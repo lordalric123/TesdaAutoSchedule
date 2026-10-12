@@ -128,6 +128,36 @@ THEME_PRESETS = {
 }
 
 app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
+# Generous but not unlimited — guards against a stray huge upload while comfortably
+# covering real TMIS registry exports (typically well under a few MB). Without this,
+# a request over Werkzeug's own limits, or any unhandled server error, would fall
+# through to Flask's default HTML error page, which breaks the frontend's
+# `response.json()` calls with a confusing "Unexpected token '<'" error instead of a
+# real message.
+app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024  # 64 MB
+
+
+@app.errorhandler(Exception)
+def handle_any_error(exc):
+    """Make sure every /api/* failure comes back as JSON, never Flask/Werkzeug's
+    default HTML error page. An HTML error page sent to a frontend `fetch(...).json()`
+    call produces a cryptic "Unexpected token '<' ... is not valid JSON" error instead
+    of the actual problem, which is what this prevents."""
+    from werkzeug.exceptions import HTTPException
+
+    if isinstance(exc, HTTPException):
+        code = exc.code or 500
+        message = exc.description or str(exc)
+    else:
+        code = 500
+        message = str(exc) or exc.__class__.__name__
+    if request.path.startswith("/api/"):
+        return jsonify({"ok": False, "error": message}), code
+    if isinstance(exc, HTTPException):
+        return exc
+    raise exc
+
+
 registry = ExcelRegistry()
 settings_store = JsonStore(
     DATA_DIR / "settings.json",
@@ -283,6 +313,7 @@ def decorate(assessment: dict) -> dict:
         item["assessor_type"] = ""
         item["assessor_type_label"] = "Not yet assigned"
         item["assessors_label"] = "Not yet assigned"
+    item.setdefault("remarks", "")
     item["date_label"] = format_range(item["start_date"], item["end_date"])
     item["approved_date_list"] = unique_dates(item["approved_dates"])
     item["schedule_reminder_list"] = unique_dates(item["schedule_reminder_dates"])
@@ -307,6 +338,7 @@ def build_assessment(payload: dict, existing: dict | None = None) -> dict:
     # calculated — before anyone has been assigned to conduct it yet.
     assessors = normalize_assessors(payload, existing)
     representative = (payload.get("tesda_representative") or "").strip()
+    remarks = (payload.get("remarks") or "").strip()
     if not center or not qualification:
         raise ValueError("Assessment center and qualification are required.")
 
@@ -325,6 +357,7 @@ def build_assessment(payload: dict, existing: dict | None = None) -> dict:
         "assessor": assessors[0]["name"] if assessors else "",
         "assessor_type": assessors[0]["assessor_type"] if assessors else "",
         "tesda_representative": representative,
+        "remarks": remarks,
         "assessment_dates": derived["assessment_dates"],
         "approved_dates": derived["approved_dates"],
         "schedule_reminder_dates": derived["schedule_reminder_dates"],
@@ -656,8 +689,29 @@ def upload_excel():
         "region": "region_assessors.xlsx",
     }[kind]
     dest = EXCEL_DIR / dest_name
-    EXCEL_DIR.mkdir(parents=True, exist_ok=True)
-    uploaded.save(dest)
+    tmp_dest = dest.with_suffix(dest.suffix + ".tmp")
+    try:
+        EXCEL_DIR.mkdir(parents=True, exist_ok=True)
+        # Save to a temp file first and swap it in. This avoids ever leaving dest
+        # half-written if the upload fails partway, and on most systems a rename can
+        # succeed even in cases a direct overwrite would not.
+        uploaded.save(tmp_dest)
+        os.replace(tmp_dest, dest)
+    except PermissionError:
+        tmp_dest.unlink(missing_ok=True)
+        return jsonify({
+            "ok": False,
+            "error": (
+                f"Could not save {dest_name} — Windows says it's locked by another "
+                "program. This almost always means the file is currently open in "
+                "Excel (or still syncing in OneDrive/Dropbox). Close it — and check "
+                f"for a hidden lock file named ~${dest_name} in the same folder — "
+                "then try uploading again."
+            ),
+        }), 400
+    except OSError as exc:
+        tmp_dest.unlink(missing_ok=True)
+        return jsonify({"ok": False, "error": f"Could not save the uploaded file: {exc}"}), 400
     settings = normalize_settings()
     if kind == "centers":
         settings["centers_path"] = dest_name
@@ -1071,9 +1125,27 @@ def export_reports():
             return jsonify({"error": str(exc)}), 400
 
         all_assessments = assessments_store.read()
+        # Each assessment is placed in exactly one sheet, never repeated across
+        # months just because its date range happens to straddle a month boundary
+        # (e.g. September 29 - October 2). It goes to the month its start date
+        # falls in when that month is part of the export; otherwise — if it
+        # started before the exported range but still runs into it — it goes to
+        # the earliest exported month it overlaps.
+        months_set = set(months)
+        buckets: dict[tuple[int, int], list[dict]] = {ym: [] for ym in months}
+        for item in all_assessments:
+            start = parse_iso_date(item["start_date"])
+            start_month = (start.year, start.month)
+            if start_month in months_set:
+                target = start_month
+            else:
+                target = next((ym for ym in months if overlaps_month(item, *ym)), None)
+            if target is not None:
+                buckets[target].append(decorate(item))
+
         month_payload = []
         for year, month in months:
-            items = [decorate(item) for item in all_assessments if overlaps_month(item, year, month)]
+            items = buckets[(year, month)]
             items.sort(key=lambda x: x["start_date"])
             month_payload.append((year, month, items))
 

@@ -11,6 +11,7 @@ const state = {
   editingId: null,
   prefill: null,
   expandedTasks: new Set(),
+  recordsSort: "added_desc",
 };
 
 const titles = {
@@ -39,6 +40,26 @@ async function api(path, options = {}) {
   const contentType = res.headers.get("content-type") || "";
   if (contentType.includes("application/json")) return res.json();
   return res;
+}
+
+// Safely reads a fetch Response that's expected to be JSON. Used for the couple of
+// upload flows that post raw FormData instead of going through api(), so a
+// non-JSON response (a server crash page, a proxy timeout page, etc.) surfaces a
+// readable message instead of crashing with "Unexpected token '<' ... is not valid
+// JSON" on res.json().
+async function readJsonResponse(res) {
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    const snippet = text.replace(/\s+/g, " ").trim().slice(0, 160);
+    const status = `${res.status} ${res.statusText}`.trim();
+    throw new Error(
+      snippet
+        ? `Server error (${status}): ${snippet}${text.length > 160 ? "…" : ""}`
+        : `Server error (${status}) with no details.`
+    );
+  }
 }
 
 function $(id) { return document.getElementById(id); }
@@ -169,19 +190,6 @@ function fmtShort(iso) {
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-const assessorOptionsCache = {};
-async function getAssessorOptions(qualification) {
-  if (!assessorOptionsCache[qualification]) {
-    const q = `&qualification=${encodeURIComponent(qualification)}`;
-    const [province, region] = await Promise.all([
-      api(`/api/assessors?source=province${q}`),
-      api(`/api/assessors?source=region${q}`),
-    ]);
-    assessorOptionsCache[qualification] = { province: province.assessors, region: region.assessors };
-  }
-  return assessorOptionsCache[qualification];
-}
-
 // Normalizes a dashboard item or a calendar event into one consistent shape.
 function taskCardModel(raw, kind) {
   if (kind === "assessment") {
@@ -236,27 +244,12 @@ function renderTaskCard(m) {
       <div class="task-detail-row">
         <span class="task-detail-label">Assessor(s)</span>
         <span class="task-chip-list">
-          ${m.assessors.map((a) => `<span class="chip">${escapeHtml(a.name)} <small class="muted">(${a.assessor_type === "region" ? "Region" : "Province"})</small></span>`).join("")}
-          <button type="button" class="linkish" data-toggle-add-assessor="${escapeHtml(m.taskId)}">+ Add assessor</button>
-        </span>
-        <div class="assessor-add-form" data-assessor-form="${escapeHtml(m.taskId)}" hidden>
-          <select class="inline-type-select" data-inline-type="${escapeHtml(m.taskId)}">
-            <option value="province">Province-Based</option>
-            <option value="region">Region-Based</option>
-          </select>
-          <select class="inline-assessor-select" data-inline-assessor="${escapeHtml(m.taskId)}">
-            <option value="">Loading…</option>
-          </select>
-          <button type="button" class="ghost" data-save-assessor="${escapeHtml(m.taskId)}" data-assessment-id="${escapeHtml(m.assessmentId)}" data-qualification="${escapeHtml(m.qualification)}">Add</button>
-        </div>
-      </div>
-      <div class="task-detail-row">
-        <span class="task-detail-label">TESDA Rep</span>
-        <span class="task-rep-edit">
-          <input type="text" list="rep-options-inline" placeholder="Not set" value="${escapeHtml(m.tesdaRepresentative)}" data-rep-input="${escapeHtml(m.taskId)}" />
-          <button type="button" class="ghost" data-save-rep="${escapeHtml(m.taskId)}" data-assessment-id="${escapeHtml(m.assessmentId)}">Save</button>
+          ${m.assessors.length
+            ? m.assessors.map((a) => `<span class="chip">${escapeHtml(a.name)} <small class="muted">(${a.assessor_type === "region" ? "Region" : "Province"})</small></span>`).join("")
+            : `<span class="muted">Not yet assigned</span>`}
         </span>
       </div>
+      <div class="task-detail-row"><span class="task-detail-label">TESDA Rep</span><span>${escapeHtml(m.tesdaRepresentative || "—")}</span></div>
       <div class="row-actions" style="margin-top:8px">
         <button type="button" class="ghost" data-open-assessment="${escapeHtml(m.assessmentId)}">View / edit assessment</button>
       </div>
@@ -270,7 +263,7 @@ function renderTaskCard(m) {
         <span class="chip ${KIND_CLASS[m.kind]}" style="flex:none">${KIND_LABEL[m.kind]}</span>
         <div class="task-card-summary" data-task-expand-toggle="${escapeHtml(m.taskId)}">
           <b>${escapeHtml(m.qualification)}</b>
-          <span class="muted">${dateLine} · ${escapeHtml(assessorNames)}</span>
+          <span class="muted">${dateLine} · ${escapeHtml(m.assessmentCenter || "—")} · ${escapeHtml(assessorNames)}</span>
         </div>
         <button type="button" class="ghost task-chevron" data-task-expand-toggle="${escapeHtml(m.taskId)}">${expanded ? "▲" : "▼"}</button>
       </div>
@@ -285,9 +278,11 @@ function renderTaskCardGroup(models, emptyMessage) {
 }
 
 // Wires every task card's interactive bits inside `container`. `refresh` is called
-// after any successful change (toggle, add assessor, save rep) so the caller can
-// re-fetch its own data; expand/collapse state survives because it's tracked by
-// task_id in state.expandedTasks, not by DOM node.
+// after any successful change (toggle) so the caller can re-fetch its own data;
+// expand/collapse state survives because it's tracked by task_id in
+// state.expandedTasks, not by DOM node. Editing assessors/TESDA rep is no
+// longer done inline here — "View / edit assessment" sends the person to the
+// full Scheduler for that.
 function bindTaskCards(container, refresh) {
   container.querySelectorAll("[data-task-toggle]").forEach((box) => {
     box.addEventListener("change", async () => {
@@ -321,93 +316,13 @@ function bindTaskCards(container, refresh) {
       switchView("scheduler");
     });
   });
-
-  container.querySelectorAll("[data-toggle-add-assessor]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const taskId = btn.dataset.toggleAddAssessor;
-      const form = container.querySelector(`[data-assessor-form="${CSS.escape(taskId)}"]`);
-      if (!form) return;
-      form.hidden = !form.hidden;
-      if (!form.hidden) await populateInlineAssessorSelect(container, taskId);
-    });
-  });
-
-  container.querySelectorAll("[data-inline-type]").forEach((sel) => {
-    sel.addEventListener("change", () => populateInlineAssessorSelect(container, sel.dataset.inlineType));
-  });
-
-  container.querySelectorAll("[data-save-assessor]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const taskId = btn.dataset.saveAssessor;
-      const assessmentId = btn.dataset.assessmentId;
-      const typeSel = container.querySelector(`[data-inline-type="${CSS.escape(taskId)}"]`);
-      const nameSel = container.querySelector(`[data-inline-assessor="${CSS.escape(taskId)}"]`);
-      if (!nameSel || !nameSel.value) {
-        toast("Pick an assessor first.", "error");
-        return;
-      }
-      const model = findCardModel(taskId);
-      const nextAssessors = [...(model ? model.assessors : []), { name: nameSel.value, assessor_type: typeSel.value }];
-      try {
-        await api(`/api/assessments/${assessmentId}/quick-update`, {
-          method: "POST",
-          headers: jsonHeaders(),
-          body: JSON.stringify({ assessors: nextAssessors }),
-        });
-      } catch (err) {
-        toast(err.message, "error");
-        return;
-      }
-      toast("Assessor added.");
-      refresh();
-    });
-  });
-
-  container.querySelectorAll("[data-save-rep]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const taskId = btn.dataset.saveRep;
-      const assessmentId = btn.dataset.assessmentId;
-      const input = container.querySelector(`[data-rep-input="${CSS.escape(taskId)}"]`);
-      try {
-        await api(`/api/assessments/${assessmentId}/quick-update`, {
-          method: "POST",
-          headers: jsonHeaders(),
-          body: JSON.stringify({ tesda_representative: input ? input.value : "" }),
-        });
-      } catch (err) {
-        toast(err.message, "error");
-        return;
-      }
-      toast("TESDA representative saved.");
-      refresh();
-    });
-  });
 }
 
-// Tracks the models from the most recent render so the "Add assessor" handler can
-// read a card's current assessor list without re-parsing the DOM.
+// Tracks the models from the most recent render, kept around in case other
+// code needs to look up a card's current data by task_id.
 let lastRenderedCardModels = {};
-function findCardModel(taskId) {
-  return lastRenderedCardModels[taskId] || null;
-}
 function trackCardModels(models) {
   models.forEach((m) => { lastRenderedCardModels[m.taskId] = m; });
-}
-
-async function populateInlineAssessorSelect(container, taskId) {
-  const model = findCardModel(taskId);
-  if (!model) return;
-  const typeSel = container.querySelector(`[data-inline-type="${CSS.escape(taskId)}"]`);
-  const nameSel = container.querySelector(`[data-inline-assessor="${CSS.escape(taskId)}"]`);
-  if (!typeSel || !nameSel) return;
-  nameSel.innerHTML = `<option value="">Loading…</option>`;
-  try {
-    const options = await getAssessorOptions(model.qualification);
-    const list = options[typeSel.value] || [];
-    nameSel.innerHTML = `<option value="">Select assessor</option>${optionList(list)}`;
-  } catch {
-    nameSel.innerHTML = `<option value="">Could not load assessors</option>`;
-  }
 }
 
 async function renderDashboard() {
@@ -461,11 +376,12 @@ async function renderScheduler(extra) {
   const current = editing || {
     assessment_center: prefill.assessment_center || "",
     qualification: prefill.qualification || "",
-    duration_type: "single",
+    duration_type: "continuous",
     start_date: "",
     end_date: "",
     pax: "",
     tesda_representative: prefill.tesda_representative || "",
+    remarks: prefill.remarks || "",
   };
 
   let startingAssessorRows;
@@ -489,6 +405,104 @@ async function renderScheduler(extra) {
     assessor: row.assessor || "",
   }));
 
+  // Approved (schedule reminder) dates are normally auto-calculated, one per
+  // assessment day, but can be hand-edited here for a special exemption — the
+  // backend keeps whichever ones actually differ from its own calculation and
+  // flags the record as manually overridden so "Recalculate all assessment
+  // dates" in Settings leaves it alone.
+  let approvedRows = [];
+  let defaultApprovedByDate = {};
+  async function fetchDerivedDates(startVal, endVal, durationType) {
+    if (!startVal) return null;
+    const params = new URLSearchParams({ start_date: startVal, end_date: endVal || startVal, duration_type: durationType });
+    try {
+      return await api(`/api/calculate-dates?${params.toString()}`);
+    } catch (err) {
+      toast(err.message, "error");
+      return null;
+    }
+  }
+  if (editing && editing.approved_dates && editing.approved_dates.length) {
+    approvedRows = editing.approved_dates.map((p) => ({ ...p }));
+    const derived = await fetchDerivedDates(editing.start_date, editing.end_date, editing.duration_type);
+    if (derived) derived.approved_dates.forEach((p) => { defaultApprovedByDate[p.assessment_date] = p.date; });
+  } else if (prefill.approved_dates && prefill.approved_dates.length) {
+    approvedRows = prefill.approved_dates.map((p) => ({ ...p }));
+    const derived = await fetchDerivedDates(current.start_date, current.end_date || current.start_date, current.duration_type === "continuous" ? "continuous" : "single");
+    if (derived) derived.approved_dates.forEach((p) => { defaultApprovedByDate[p.assessment_date] = p.date; });
+  } else if (current.start_date) {
+    const derived = await fetchDerivedDates(current.start_date, current.end_date || current.start_date, current.duration_type === "continuous" ? "continuous" : "single");
+    if (derived) {
+      derived.approved_dates.forEach((p) => { defaultApprovedByDate[p.assessment_date] = p.date; });
+      approvedRows = derived.assessment_dates.map((ad) => ({ assessment_date: ad, date: defaultApprovedByDate[ad] }));
+    }
+  }
+
+  function approvedDatesHtml() {
+    if (!approvedRows.length) return `<p class="muted">Pick the assessment date(s) above first.</p>`;
+    return approvedRows.map((row, index) => {
+      const isOverride = !!defaultApprovedByDate[row.assessment_date] && row.date !== defaultApprovedByDate[row.assessment_date];
+      return `
+        <div class="approved-date-row${isOverride ? " approved-date-row-override" : ""}">
+          <span class="approved-date-label">For ${escapeHtml(fmt(row.assessment_date))}</span>
+          <input type="date" class="approved-date-input" data-index="${index}" value="${row.date || ""}" />
+          ${isOverride
+            ? `<button type="button" class="ghost approved-date-reset" data-index="${index}">Reset</button>`
+            : `<span class="muted" style="font-size:12px;white-space:nowrap">Calculated</span>`}
+        </div>
+      `;
+    }).join("");
+  }
+
+  function bindApprovedDateEvents() {
+    document.querySelectorAll(".approved-date-input").forEach((input) => {
+      input.addEventListener("change", () => {
+        const idx = Number(input.dataset.index);
+        approvedRows[idx].date = input.value;
+        redrawApprovedDates();
+      });
+    });
+    document.querySelectorAll(".approved-date-reset").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const idx = Number(btn.dataset.index);
+        const ad = approvedRows[idx].assessment_date;
+        if (defaultApprovedByDate[ad]) approvedRows[idx].date = defaultApprovedByDate[ad];
+        redrawApprovedDates();
+      });
+    });
+  }
+
+  function redrawApprovedDates() {
+    $("approved-dates-rows").innerHTML = approvedDatesHtml();
+    bindApprovedDateEvents();
+  }
+
+  // Re-syncs approvedRows/defaultApprovedByDate whenever the date range or
+  // duration changes, preserving any day the person already hand-edited (as
+  // long as that same assessment date still exists in the new range).
+  async function onDateRangeChanged() {
+    const startVal = form.start_date.value;
+    const durationType = $("duration-type-checkbox").checked ? "continuous" : "single";
+    const endVal = durationType === "continuous" ? (form.end_date.value || startVal) : startVal;
+    const derived = await fetchDerivedDates(startVal, endVal, durationType);
+    if (!derived) {
+      approvedRows = [];
+      defaultApprovedByDate = {};
+      redrawApprovedDates();
+      return;
+    }
+    const newDefaults = {};
+    derived.approved_dates.forEach((p) => { newDefaults[p.assessment_date] = p.date; });
+    const preserved = {};
+    approvedRows.forEach((row) => {
+      const oldDefault = defaultApprovedByDate[row.assessment_date];
+      if (oldDefault && row.date !== oldDefault) preserved[row.assessment_date] = row.date;
+    });
+    defaultApprovedByDate = newDefaults;
+    approvedRows = derived.assessment_dates.map((ad) => ({ assessment_date: ad, date: preserved[ad] || newDefaults[ad] }));
+    redrawApprovedDates();
+  }
+
   const quals = current.assessment_center
     ? (state.centers.find((c) => c.name === current.assessment_center)?.qualifications || [])
     : [];
@@ -502,18 +516,36 @@ async function renderScheduler(extra) {
   function assessorRowsHtml() {
     return assessorRows.map((row, index) => {
       const list = assessorsBySource[row.assessor_type].assessors;
+      const thisLabel = row.assessor_type === "province" ? "Province-Based" : "Region-Based";
+      const otherSource = row.assessor_type === "province" ? "region" : "province";
+      const otherLabel = otherSource === "region" ? "Region-Based" : "Province-Based";
+      const otherList = assessorsBySource[otherSource].assessors;
+      const isCustom = !!row.assessor && !list.some((a) => a.name === row.assessor);
+      const emptyHint = !list.length
+        ? (otherList.length
+            ? `<p class="hint" style="margin:4px 0 0">No ${thisLabel} assessors recorded for this qualification — ${otherList.length} available under ${otherLabel} instead. You can also just type a name below for someone not in the Excel file.</p>`
+            : `<p class="hint" style="margin:4px 0 0">No assessors recorded for this qualification under either Province-Based or Region-Based in the uploaded Excel files. Type a name below to add one anyway.</p>`)
+        : "";
       return `
         <div class="assessor-row">
           <select class="assessor-type-input" data-index="${index}">
             <option value="province" ${row.assessor_type === "province" ? "selected" : ""}>Province-Based</option>
             <option value="region" ${row.assessor_type === "region" ? "selected" : ""}>Region-Based</option>
           </select>
-          <select class="assessor-name-input" data-index="${index}">
-            <option value="">Select assessor</option>
-            ${optionList(list, row.assessor)}
-          </select>
+          <input
+            type="text"
+            class="assessor-name-input"
+            data-index="${index}"
+            list="assessor-options-${index}"
+            placeholder="Type a name or pick a saved one"
+            value="${escapeHtml(row.assessor)}"
+          />
+          <datalist id="assessor-options-${index}">
+            ${optionList(list)}
+          </datalist>
           <button type="button" class="ghost assessor-remove" data-index="${index}" ${assessorRows.length <= 1 ? "disabled" : ""}>Remove</button>
         </div>
+        ${isCustom ? `<p class="hint" style="margin:4px 0 0">"${escapeHtml(row.assessor)}" isn't in the Excel registry — it'll be saved as a custom assessor.</p>` : emptyHint}
       `;
     }).join("");
   }
@@ -531,10 +563,17 @@ async function renderScheduler(extra) {
         redrawAssessorRows();
       });
     });
-    document.querySelectorAll(".assessor-name-input").forEach((sel) => {
-      sel.addEventListener("change", () => {
-        const idx = Number(sel.dataset.index);
-        assessorRows[idx].assessor = sel.value;
+    document.querySelectorAll(".assessor-name-input").forEach((input) => {
+      input.addEventListener("input", () => {
+        const idx = Number(input.dataset.index);
+        assessorRows[idx].assessor = input.value;
+      });
+      // Re-render on blur only, so the "custom assessor" hint and dedupe-safe state
+      // stay in sync without fighting the caret position while the person is typing.
+      input.addEventListener("change", () => {
+        const idx = Number(input.dataset.index);
+        assessorRows[idx].assessor = input.value;
+        redrawAssessorRows();
       });
     });
     document.querySelectorAll(".assessor-remove").forEach((btn) => {
@@ -569,10 +608,11 @@ async function renderScheduler(extra) {
           </div>
           <div class="field">
             <label>Assessment Duration</label>
-            <select name="duration_type">
-              <option value="single" ${current.duration_type === "single" ? "selected" : ""}>Single Day</option>
-              <option value="continuous" ${current.duration_type === "continuous" ? "selected" : ""}>Continuous / Multiple Days</option>
-            </select>
+            <label class="checkbox-field">
+              <input type="checkbox" name="duration_type" id="duration-type-checkbox" value="continuous" ${current.duration_type === "continuous" ? "checked" : ""} />
+              <span>Continuous / Multiple Days</span>
+            </label>
+            <span class="muted" style="font-size:12px">Unchecked = single day</span>
           </div>
           <div class="field">
             <label>Number of Pax</label>
@@ -587,6 +627,11 @@ async function renderScheduler(extra) {
             <input type="date" name="end_date" value="${current.end_date || ""}" />
           </div>
           <div class="field full">
+            <label>Approved / Schedule Dates</label>
+            <p class="hint">Calculated automatically from the assessment date(s) above. Edit a date only for a special exemption — rows left as-is stay on the automatic rule.</p>
+            <div id="approved-dates-rows">${approvedDatesHtml()}</div>
+          </div>
+          <div class="field full">
             <label>Assessors</label>
             <div id="assessor-rows">${assessorRowsHtml()}</div>
             <button type="button" class="ghost" id="add-assessor">+ Add another assessor</button>
@@ -598,6 +643,10 @@ async function renderScheduler(extra) {
               ${state.representatives.map((r) => `<option value="${escapeHtml(r.name)}"></option>`).join("")}
             </datalist>
           </div>
+          <div class="field full">
+            <label>Remarks</label>
+            <textarea name="remarks" placeholder="Optional — leave blank if none">${escapeHtml(current.remarks || "")}</textarea>
+          </div>
           <div class="field full row-actions">
             <button class="primary" type="submit">${editing ? "Update record" : "Save assessment"}</button>
             ${editing ? `<button class="ghost" type="button" id="cancel-edit">Cancel</button>` : ""}
@@ -606,32 +655,51 @@ async function renderScheduler(extra) {
       </div>
       <div class="card scheduler-records">
         <h3>Assessment records</h3>
-        ${assessmentCards(state.assessments)}
+        <div class="records-toolbar">
+          <label for="records-sort" class="muted" style="text-transform:none;letter-spacing:normal">Sort by</label>
+          <select id="records-sort">
+            <option value="added_desc" ${state.recordsSort === "added_desc" ? "selected" : ""}>Date added (newest first)</option>
+            <option value="added_asc" ${state.recordsSort === "added_asc" ? "selected" : ""}>Date added (oldest first)</option>
+            <option value="assessment_desc" ${state.recordsSort === "assessment_desc" ? "selected" : ""}>Assessment date (latest first)</option>
+            <option value="assessment_asc" ${state.recordsSort === "assessment_asc" ? "selected" : ""}>Assessment date (earliest first)</option>
+          </select>
+        </div>
+        <div id="records-list">${assessmentCards(sortAssessments(state.assessments, state.recordsSort))}</div>
       </div>
     </div>
   `;
+
+  $("records-sort").addEventListener("change", (event) => {
+    state.recordsSort = event.target.value;
+    $("records-list").innerHTML = assessmentCards(sortAssessments(state.assessments, state.recordsSort));
+    bindRecordButtons();
+  });
 
   bindAssessorRowEvents();
   $("add-assessor").addEventListener("click", () => {
     assessorRows.push({ assessor_type: "province", assessor: "" });
     redrawAssessorRows();
   });
+  bindApprovedDateEvents();
 
   const form = $("assessment-form");
-  const duration = form.duration_type;
+  const duration = $("duration-type-checkbox");
   const endWrap = $("end-wrap");
   duration.addEventListener("change", () => {
-    const continuous = duration.value === "continuous";
+    const continuous = duration.checked;
     endWrap.style.display = continuous ? "" : "none";
     $("start-label").textContent = continuous ? "Start Date" : "Assessment Date";
+    onDateRangeChanged();
   });
+  form.start_date.addEventListener("change", onDateRangeChanged);
+  form.end_date.addEventListener("change", onDateRangeChanged);
   form.assessment_center.addEventListener("change", async () => {
-    state.prefill = { ...formValues(form), assessors: assessorRows.slice() };
+    state.prefill = { ...formValues(form), assessors: assessorRows.slice(), approved_dates: approvedRows.slice() };
     state.prefill.qualification = "";
     await renderScheduler({ prefill: state.prefill, assessment: editing });
   });
   form.qualification.addEventListener("change", async () => {
-    state.prefill = { ...formValues(form), assessors: assessorRows.slice() };
+    state.prefill = { ...formValues(form), assessors: assessorRows.slice(), approved_dates: approvedRows.slice() };
     await renderScheduler({ prefill: state.prefill, assessment: editing });
   });
   form.addEventListener("submit", async (event) => {
@@ -642,6 +710,7 @@ async function renderScheduler(extra) {
     payload.assessors = assessorRows
       .filter((row) => row.assessor)
       .map((row) => ({ name: row.assessor, assessor_type: row.assessor_type }));
+    payload.approved_dates = approvedRows.map((row) => ({ assessment_date: row.assessment_date, date: row.date }));
     // Assessors are optional — the date can be locked in before anyone is assigned.
     try {
       if (editing) {
@@ -667,7 +736,11 @@ async function renderScheduler(extra) {
 }
 
 function formValues(form) {
-  return Object.fromEntries(new FormData(form).entries());
+  const values = Object.fromEntries(new FormData(form).entries());
+  // duration_type is now a checkbox ("Continuous / Multiple Days"); FormData
+  // only includes it when checked, so an absent entry means single-day.
+  values.duration_type = values.duration_type === "continuous" ? "continuous" : "single";
+  return values;
 }
 
 function jsonHeaders() {
@@ -699,6 +772,28 @@ function assessorsSummary(item) {
     .join("; ");
 }
 
+function sortAssessments(items, sortKey) {
+  const sorted = items.slice();
+  const byAdded = (item) => item.created_at || "";
+  const byAssessmentDate = (item) => item.start_date || "";
+  switch (sortKey) {
+    case "added_asc":
+      sorted.sort((a, b) => byAdded(a).localeCompare(byAdded(b)));
+      break;
+    case "assessment_desc":
+      sorted.sort((a, b) => byAssessmentDate(b).localeCompare(byAssessmentDate(a)));
+      break;
+    case "assessment_asc":
+      sorted.sort((a, b) => byAssessmentDate(a).localeCompare(byAssessmentDate(b)));
+      break;
+    case "added_desc":
+    default:
+      sorted.sort((a, b) => byAdded(b).localeCompare(byAdded(a)));
+      break;
+  }
+  return sorted;
+}
+
 function assessmentCards(items) {
   if (!items.length) return `<p class="empty">No assessments yet.</p>`;
   return `<div class="record-list">${items.map((item) => `
@@ -708,11 +803,13 @@ function assessmentCards(items) {
       <div class="record-meta">
         <span class="chip">${escapeHtml(durationLabel(item.duration_type))}</span>
         <span class="chip gold">${escapeHtml(assessorChipLabel(item))}</span>
+        ${item.approved_dates_manual ? `<span class="chip rose">Manually overridden dates</span>` : ""}
         <span>${escapeHtml(item.date_label)}</span>
         <span class="muted">${item.pax} pax</span>
       </div>
       <div><b>Assessors:</b> ${escapeHtml(assessorsSummary(item))}</div>
       <div><b>TESDA Representative:</b> ${escapeHtml(item.tesda_representative || "None")}</div>
+      ${item.remarks ? `<div><b>Remarks:</b> ${escapeHtml(item.remarks)}</div>` : ""}
       <div class="muted">Approved: ${escapeHtml(item.approved_date_list.map(fmt).join("; ") || "—")}</div>
       <div class="muted">Results: ${escapeHtml(item.results_reminder_list.map(fmt).join("; ") || "—")}</div>
       <div class="row-actions">
@@ -1340,8 +1437,8 @@ async function renderSettings() {
       body.set("kind", form.dataset.upload);
       try {
         const res = await fetch("/api/settings/upload", { method: "POST", body });
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.error || "Upload failed");
+        const json = await readJsonResponse(res);
+        if (!res.ok || json.ok === false) throw new Error(json.error || "Upload failed");
         toast("Excel file updated and reloaded.");
         await renderSettings();
       } catch (err) {
@@ -1355,8 +1452,8 @@ async function renderSettings() {
     if (!confirm("Importing a backup replaces assessments, representatives, and Excel registries on this computer. Continue?")) return;
     try {
       const res = await fetch("/api/backup/import", { method: "POST", body });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Import failed");
+      const json = await readJsonResponse(res);
+      if (!res.ok || json.ok === false) throw new Error(json.error || "Import failed");
       toast(`Backup imported: ${json.assessments} assessments, ${json.representatives} representatives.`);
       await renderSettings();
     } catch (err) {

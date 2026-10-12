@@ -168,6 +168,36 @@ input, select, textarea {
 }
 textarea { min-height: 72px; resize: vertical; }
 
+.checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-direction: row;
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: 0.95rem;
+  color: var(--text);
+  cursor: pointer;
+}
+.checkbox-field input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  flex: none;
+  accent-color: var(--accent, #2563eb);
+  cursor: pointer;
+}
+
+.records-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.records-toolbar label { margin: 0; }
+.records-toolbar select { min-width: 220px; }
+
 #assessor-rows { display: flex; flex-direction: column; gap: 8px; }
 .assessor-row {
   display: grid;
@@ -181,6 +211,26 @@ textarea { min-height: 72px; resize: vertical; }
 
 @media (max-width: 640px) {
   .assessor-row { grid-template-columns: 1fr; }
+}
+
+#approved-dates-rows { display: flex; flex-direction: column; gap: 6px; }
+.approved-date-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.approved-date-row-override { border-color: var(--danger); background: rgba(251, 113, 133, 0.06); }
+.approved-date-label { font-size: 0.88rem; color: var(--muted); }
+.approved-date-row-override .approved-date-label { color: var(--text); }
+.approved-date-input { padding: 6px 10px; }
+.approved-date-reset { white-space: nowrap; padding: 6px 10px; }
+
+@media (max-width: 640px) {
+  .approved-date-row { grid-template-columns: 1fr; }
 }
 
 .table-wrap { overflow: auto; max-width: 100%; }

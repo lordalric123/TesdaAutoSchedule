@@ -94,7 +94,7 @@ def compact_approved_dates(iso_dates: list[str]) -> str:
 def _populate_monitoring_sheet(sheet, month_label: str, items: list[dict]) -> None:
     _make_print_ready(sheet, repeat_rows="2:2", paper_size=sheet.PAPERSIZE_LEGAL)
 
-    sheet.merge_cells("A1:G1")
+    sheet.merge_cells("A1:H1")
     title = sheet["A1"]
     title.value = f"ASSESSMENT SCHEDULES FOR {month_label.upper()}"
     title.fill = TITLE_FILL
@@ -110,6 +110,7 @@ def _populate_monitoring_sheet(sheet, month_label: str, items: list[dict]) -> No
         "NUMBER OF PAX",
         "ASSESSOR",
         "TESDA REPRESENTATIVE",
+        "REMARKS",
     ]
     for col, header in enumerate(headers, start=1):
         cell = sheet.cell(2, col, header)
@@ -118,9 +119,9 @@ def _populate_monitoring_sheet(sheet, month_label: str, items: list[dict]) -> No
         cell.alignment = CENTER_ALIGN
         cell.border = THIN_BORDER
     sheet.row_dimensions[2].height = 22
-    sheet.auto_filter.ref = f"A2:G{max(3, 2 + len(items))}"
+    sheet.auto_filter.ref = f"A2:H{max(3, 2 + len(items))}"
     sheet.freeze_panes = "A3"
-    sheet.print_area = f"A1:G{max(3, 2 + len(items))}"
+    sheet.print_area = f"A1:H{max(3, 2 + len(items))}"
 
     for index, item in enumerate(items):
         row = 3 + index
@@ -135,6 +136,7 @@ def _populate_monitoring_sheet(sheet, month_label: str, items: list[dict]) -> No
             item.get("pax") or "",
             assessor_text,
             item.get("tesda_representative") or "",
+            item.get("remarks") or "",
         ]
         fill = ZEBRA_FILL if index % 2 else None
         for col, value in enumerate(values, start=1):
@@ -147,7 +149,7 @@ def _populate_monitoring_sheet(sheet, month_label: str, items: list[dict]) -> No
         line_count = max(1, assessor_text.count("\n") + 1)
         sheet.row_dimensions[row].height = max(32, 16 * line_count + 16)
 
-    widths = [18, 42, 36, 16, 14, 28, 26]
+    widths = [18, 42, 36, 16, 14, 28, 26, 30]
     for index, width in enumerate(widths, start=1):
         sheet.column_dimensions[get_column_letter(index)].width = width
 
