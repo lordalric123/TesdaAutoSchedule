@@ -4,7 +4,7 @@ const state = {
   representatives: [],
   assessments: [],
   calendar: { type: "approved", year: new Date().getFullYear(), month: new Date().getMonth() + 1, payload: null },
-  finder: { query: "", selected: "", source: "" },
+  finder: { query: "", selected: "", source: "", tab: "assessors", picked: { assessment_center: "", assessor: "", assessor_type: "province" } },
   report: { year: new Date().getFullYear(), month: new Date().getMonth() + 1, q: "" },
   history: { qualification: "", assessor_type: "", tab: "log" },
   theme: null,
@@ -986,97 +986,155 @@ async function refreshCalendarCounts(iso) {
 async function renderFinder() {
   const query = state.finder.query;
   const source = state.finder.source || "";
+  const tab = state.finder.tab === "centers" ? "centers" : "assessors";
+  const picked = state.finder.picked;
   const data = await api(`/api/finder?q=${encodeURIComponent(query)}&qualification=${encodeURIComponent(state.finder.selected)}&source=${encodeURIComponent(source)}`);
   const sourceLabel = source === "region" ? "Region-Based" : source === "province" ? "Province-Based" : "All";
-  $("view-finder").innerHTML = `
-    <div class="card">
-      <div class="toolbar">
-        <input id="finder-q" placeholder="Search qualification, e.g. Computer" value="${escapeHtml(query)}" />
-        <button class="ghost" id="finder-clear">Clear</button>
-      </div>
-      <div class="grid two">
-        <div>
-          <h3>Qualifications</h3>
-          <div class="finder-list">
-            ${data.suggestions.length ? data.suggestions.map((q) => `
-              <button class="pick ${q === data.qualification ? "selected" : ""}" data-qual="${escapeHtml(q)}">${escapeHtml(q)}</button>
-            `).join("") : `<p class="empty">No qualifications match that search.</p>`}
+
+  const qualificationListHtml = data.suggestions.length
+    ? data.suggestions.map((q) => `
+        <button class="finder-qual-item ${q === data.qualification ? "active" : ""}" data-qual="${escapeHtml(q)}">${escapeHtml(q)}</button>
+      `).join("")
+    : `<p class="empty">No qualifications match that search.</p>`;
+
+  const assessorsPanel = `
+    <div class="segmented">
+      <button type="button" class="${source === "" ? "active" : ""}" data-source-filter="">All</button>
+      <button type="button" class="${source === "province" ? "active" : ""}" data-source-filter="province">Province-Based</button>
+      <button type="button" class="${source === "region" ? "active" : ""}" data-source-filter="region">Region-Based</button>
+    </div>
+    <div class="finder-result-list">
+      ${data.assessors.length ? data.assessors.map((a) => {
+        const isPicked = !!picked.assessor && picked.assessor === a.name;
+        const detail = [
+          a.assessor_type === "region" ? "Region-Based" : "Province-Based",
+          a.address || "",
+          a.designation || a.company || "",
+        ].filter(Boolean).join(" · ");
+        return `
+          <div class="finder-result-card ${isPicked ? "finder-result-picked" : ""}">
+            <div>
+              <b>${escapeHtml(a.display_name || a.name)}</b>
+              <span class="muted">${escapeHtml(detail)}</span>
+            </div>
+            <button type="button" class="${isPicked ? "primary" : "ghost"}" data-pick-assessor="${escapeHtml(a.name)}" data-pick-assessor-type="${escapeHtml(a.assessor_type || "province")}">${isPicked ? "Selected ✓" : "Use"}</button>
           </div>
+        `;
+      }).join("") : `<p class="empty">No ${sourceLabel.toLowerCase()} assessors found for this qualification.</p>`}
+    </div>
+  `;
+
+  const centersPanel = `
+    <div class="finder-result-list">
+      ${data.centers.length ? data.centers.map((c) => {
+        const isPicked = !!picked.assessment_center && picked.assessment_center === c.name;
+        const detail = [c.address || "", c.manager || ""].filter(Boolean).join(" · ");
+        return `
+          <div class="finder-result-card ${isPicked ? "finder-result-picked" : ""}">
+            <div>
+              <b>${escapeHtml(c.name)}</b>
+              <span class="muted">${escapeHtml(detail)}</span>
+            </div>
+            <button type="button" class="${isPicked ? "primary" : "ghost"}" data-pick-center="${escapeHtml(c.name)}">${isPicked ? "Selected ✓" : "Use"}</button>
+          </div>
+        `;
+      }).join("") : `<p class="empty">No assessment centers found for this qualification.</p>`}
+    </div>
+  `;
+
+  $("view-finder").innerHTML = `
+    <div class="finder-layout">
+      <div class="card finder-sidebar">
+        <div class="toolbar">
+          <input id="finder-q" placeholder="Search qualification, e.g. Computer" value="${escapeHtml(query)}" />
+          ${query || state.finder.selected ? `<button type="button" class="ghost" id="finder-clear">Clear</button>` : ""}
         </div>
-        <div>
-          ${data.qualification ? `
-            <p class="hint">Qualification: <b>${escapeHtml(data.qualification)}</b><br>
-            Assessors found: ${data.assessor_count} · Assessment centers found: ${data.center_count}</p>
-            <div class="row-actions" style="margin-bottom:12px">
-              <a class="ghost" style="text-decoration:none" href="/api/finder/export?qualification=${encodeURIComponent(data.qualification)}">Export Assessors to Excel</a>
+        <div class="finder-qual-list">${qualificationListHtml}</div>
+      </div>
+      <div class="card finder-main">
+        ${!data.qualification ? `
+          <p class="empty">Search or pick a qualification on the left to see its assessors and assessment centers.</p>
+        ` : `
+          <div class="finder-main-head">
+            <div>
+              <h3 style="margin-bottom:2px">${escapeHtml(data.qualification)}</h3>
+              <span class="muted">${data.assessor_count} assessor${data.assessor_count === 1 ? "" : "s"} · ${data.center_count} center${data.center_count === 1 ? "" : "s"}</span>
             </div>
-            <div class="grid two">
-              <div>
-                <div class="row-actions" style="margin-bottom:10px">
-                  <h3 style="margin:0">Available assessors</h3>
-                  <span class="chip ${source === "" ? "gold" : ""}" data-source-filter="" style="cursor:pointer">All</span>
-                  <span class="chip ${source === "province" ? "gold" : ""}" data-source-filter="province" style="cursor:pointer">Province-Based</span>
-                  <span class="chip ${source === "region" ? "gold" : ""}" data-source-filter="region" style="cursor:pointer">Region-Based</span>
-                </div>
-                ${data.assessors.length ? data.assessors.map((a) => `
-                  <div class="task">
-                    <b>${escapeHtml(a.display_name || a.name)}</b>
-                    <span>${escapeHtml(a.assessor_type === "region" ? "Region-Based" : "Province-Based")} · ${escapeHtml(a.address || "No address")} · ${escapeHtml(a.designation || a.company || "")}</span>
-                    <div class="row-actions" style="margin-top:8px">
-                      <button class="ghost" data-pick-assessor="${escapeHtml(a.name)}" data-pick-assessor-type="${escapeHtml(a.assessor_type || "province")}">Use assessor</button>
-                    </div>
-                  </div>
-                `).join("") : `<p class="empty">No ${sourceLabel.toLowerCase()} assessors found for this qualification.</p>`}
-              </div>
-              <div>
-                <h3>Assessment centers</h3>
-                ${data.centers.length ? data.centers.map((c) => `
-                  <div class="task">
-                    <b>${escapeHtml(c.name)}</b>
-                    <span>${escapeHtml(c.address || "")}${c.manager ? " · " + escapeHtml(c.manager) : ""}</span>
-                    <div class="row-actions" style="margin-top:8px">
-                      <button class="ghost" data-pick-center="${escapeHtml(c.name)}">Use center</button>
-                    </div>
-                  </div>
-                `).join("") : `<p class="empty">No assessment centers found for this qualification.</p>`}
-              </div>
+            <a class="ghost" style="text-decoration:none" href="/api/finder/export?qualification=${encodeURIComponent(data.qualification)}">Export Assessors to Excel</a>
+          </div>
+          <div class="selection-bar">
+            <div class="selection-bar-item">
+              <span class="muted" style="font-size:0.78rem">Center</span>
+              <b>${picked.assessment_center ? escapeHtml(picked.assessment_center) : "Not picked yet"}</b>
             </div>
-            <div class="row-actions" style="margin-top:16px">
-              <button class="primary" id="create-from-finder">Create assessment</button>
+            <div class="selection-bar-item">
+              <span class="muted" style="font-size:0.78rem">Assessor</span>
+              <b>${picked.assessor ? escapeHtml(picked.assessor) : "Not picked yet"}</b>
             </div>
-          ` : `<p class="empty">Select a qualification to see assessors and centers.</p>`}
-        </div>
+            <button type="button" class="primary" id="create-from-finder">Create assessment</button>
+          </div>
+          <div class="segmented" style="margin-top:16px">
+            <button type="button" class="${tab === "assessors" ? "active" : ""}" id="finder-tab-assessors">Assessors</button>
+            <button type="button" class="${tab === "centers" ? "active" : ""}" id="finder-tab-centers">Assessment Centers</button>
+          </div>
+          <div style="margin-top:14px">
+            ${tab === "assessors" ? assessorsPanel : centersPanel}
+          </div>
+        `}
       </div>
     </div>
   `;
+
   const box = $("finder-q");
   box.addEventListener("input", debounce(() => {
     state.finder.query = box.value;
     state.finder.selected = "";
     renderFinder();
   }, 250));
-  $("finder-clear").onclick = () => { state.finder = { query: "", selected: "", source: state.finder.source }; renderFinder(); };
+  $("finder-clear")?.addEventListener("click", () => {
+    state.finder = { query: "", selected: "", source: state.finder.source, tab: state.finder.tab, picked: { assessment_center: "", assessor: "", assessor_type: "province" } };
+    renderFinder();
+  });
   document.querySelectorAll("[data-qual]").forEach((btn) => {
-    btn.onclick = () => { state.finder.selected = btn.dataset.qual; renderFinder(); };
+    btn.addEventListener("click", () => {
+      state.finder.selected = btn.dataset.qual;
+      // A pick is tied to the qualification it was made under, so switching
+      // qualification starts the selection fresh rather than carrying over
+      // a center/assessor that may not even serve the new qualification.
+      state.finder.picked = { assessment_center: "", assessor: "", assessor_type: "province" };
+      renderFinder();
+    });
   });
-  document.querySelectorAll("[data-source-filter]").forEach((chip) => {
-    chip.onclick = () => { state.finder.source = chip.dataset.sourceFilter; renderFinder(); };
+  document.querySelectorAll("[data-source-filter]").forEach((btn) => {
+    btn.addEventListener("click", () => { state.finder.source = btn.dataset.sourceFilter; renderFinder(); });
   });
-  let picked = { qualification: data.qualification, assessment_center: "", assessor: "", assessor_type: "province" };
+  $("finder-tab-assessors")?.addEventListener("click", () => { state.finder.tab = "assessors"; renderFinder(); });
+  $("finder-tab-centers")?.addEventListener("click", () => { state.finder.tab = "centers"; renderFinder(); });
   document.querySelectorAll("[data-pick-center]").forEach((btn) => {
-    btn.onclick = () => { picked.assessment_center = btn.dataset.pickCenter; toast(`Center set: ${picked.assessment_center}`); };
+    btn.addEventListener("click", () => {
+      const name = btn.dataset.pickCenter;
+      state.finder.picked.assessment_center = state.finder.picked.assessment_center === name ? "" : name;
+      renderFinder();
+    });
   });
   document.querySelectorAll("[data-pick-assessor]").forEach((btn) => {
-    btn.onclick = () => {
-      picked.assessor = btn.dataset.pickAssessor;
-      picked.assessor_type = btn.dataset.pickAssessorType || "province";
-      toast(`Assessor set: ${picked.assessor}`);
-    };
+    btn.addEventListener("click", () => {
+      const name = btn.dataset.pickAssessor;
+      if (state.finder.picked.assessor === name) {
+        state.finder.picked.assessor = "";
+        state.finder.picked.assessor_type = "province";
+      } else {
+        state.finder.picked.assessor = name;
+        state.finder.picked.assessor_type = btn.dataset.pickAssessorType || "province";
+      }
+      renderFinder();
+    });
   });
   $("create-from-finder")?.addEventListener("click", () => {
     state.editingId = null;
-    state.prefill = picked;
-    switchView("scheduler", { prefill: picked });
+    const prefillData = { qualification: data.qualification, ...state.finder.picked };
+    state.prefill = prefillData;
+    switchView("scheduler", { prefill: prefillData });
   });
 }
 

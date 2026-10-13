@@ -4718,7 +4718,7 @@
     "assessment_center": "WAVECREST TRAINING INSTITUTE INC.",
     "qualification": "Animal Production (Poultry-Chicken) NC II",
     "duration_type": "continuous",
-    "start_date": "2026-08-08",
+    "start_date": "2026-08-07",
     "end_date": "2026-08-09",
     "pax": 25,
     "assessors": [
@@ -4732,10 +4732,15 @@
     "tesda_representative": "",
     "remarks": "",
     "assessment_dates": [
+      "2026-08-07",
       "2026-08-08",
       "2026-08-09"
     ],
     "approved_dates": [
+      {
+        "assessment_date": "2026-08-07",
+        "date": "2026-08-05"
+      },
       {
         "assessment_date": "2026-08-08",
         "date": "2026-08-06"
@@ -4747,6 +4752,10 @@
     ],
     "schedule_reminder_dates": [
       {
+        "assessment_date": "2026-08-07",
+        "date": "2026-08-05"
+      },
+      {
         "assessment_date": "2026-08-08",
         "date": "2026-08-06"
       },
@@ -4757,6 +4766,10 @@
     ],
     "results_reminder_dates": [
       {
+        "assessment_date": "2026-08-07",
+        "date": "2026-08-08"
+      },
+      {
         "assessment_date": "2026-08-08",
         "date": "2026-08-09"
       },
@@ -4766,7 +4779,7 @@
       }
     ],
     "created_at": "2026-10-12T13:36:59",
-    "updated_at": "2026-10-12T13:37:37"
+    "updated_at": "2026-10-13T13:12:42"
   },
   {
     "id": "3740b3bc-4d2e-4b8b-9a16-6ed536a4488a",
@@ -4890,5 +4903,73 @@
     ],
     "created_at": "2026-10-12T18:51:47",
     "updated_at": "2026-10-12T18:51:47"
+  },
+  {
+    "id": "e66b979b-d106-4163-ab84-f68b304047cc",
+    "assessment_center": "PTC - SOUTHERN LEYTE",
+    "qualification": "Masonry NC II",
+    "duration_type": "continuous",
+    "start_date": "2026-10-14",
+    "end_date": "2026-10-16",
+    "pax": 30,
+    "assessors": [
+      {
+        "name": "Cerecio Cabudbud Mendoza",
+        "assessor_type": "province"
+      }
+    ],
+    "assessor": "Cerecio Cabudbud Mendoza",
+    "assessor_type": "province",
+    "tesda_representative": "",
+    "remarks": "Scholars",
+    "assessment_dates": [
+      "2026-10-14",
+      "2026-10-15",
+      "2026-10-16"
+    ],
+    "approved_dates": [
+      {
+        "assessment_date": "2026-10-14",
+        "date": "2026-10-12"
+      },
+      {
+        "assessment_date": "2026-10-15",
+        "date": "2026-10-13"
+      },
+      {
+        "assessment_date": "2026-10-16",
+        "date": "2026-10-14"
+      }
+    ],
+    "schedule_reminder_dates": [
+      {
+        "assessment_date": "2026-10-14",
+        "date": "2026-10-12"
+      },
+      {
+        "assessment_date": "2026-10-15",
+        "date": "2026-10-13"
+      },
+      {
+        "assessment_date": "2026-10-16",
+        "date": "2026-10-14"
+      }
+    ],
+    "results_reminder_dates": [
+      {
+        "assessment_date": "2026-10-14",
+        "date": "2026-10-15"
+      },
+      {
+        "assessment_date": "2026-10-15",
+        "date": "2026-10-16"
+      },
+      {
+        "assessment_date": "2026-10-16",
+        "date": "2026-10-17"
+      }
+    ],
+    "created_at": "2026-10-13T08:24:12",
+    "updated_at": "2026-10-13T08:24:12"
   }
 ]
