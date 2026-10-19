@@ -4846,14 +4846,14 @@
     "pax": 30,
     "assessors": [
       {
-        "name": "Amiel Lora Bosque",
+        "name": "Roger . Ladica .",
         "assessor_type": "province"
       }
     ],
-    "assessor": "Amiel Lora Bosque",
+    "assessor": "Roger . Ladica .",
     "assessor_type": "province",
-    "tesda_representative": "",
-    "remarks": "Paying + Regular",
+    "tesda_representative": "Judith T. Cinco",
+    "remarks": "TWSP Scholars",
     "assessment_dates": [
       "2026-10-19",
       "2026-10-20",
@@ -4902,7 +4902,7 @@
       }
     ],
     "created_at": "2026-10-12T18:51:47",
-    "updated_at": "2026-10-12T18:51:47"
+    "updated_at": "2026-10-19T17:24:16"
   },
   {
     "id": "e66b979b-d106-4163-ab84-f68b304047cc",
@@ -4920,8 +4920,8 @@
     ],
     "assessor": "Cerecio Cabudbud Mendoza",
     "assessor_type": "province",
-    "tesda_representative": "",
-    "remarks": "Scholars",
+    "tesda_representative": "Joan V. Abeñon",
+    "remarks": "PTC Scholars",
     "assessment_dates": [
       "2026-10-14",
       "2026-10-15",
@@ -4970,6 +4970,158 @@
       }
     ],
     "created_at": "2026-10-13T08:24:12",
-    "updated_at": "2026-10-13T08:24:12"
+    "updated_at": "2026-10-19T17:23:59"
+  },
+  {
+    "id": "4f398668-76e2-4c17-9034-502060a62450",
+    "assessment_center": "SAINT JOSEPH COLLEGE,MAASIN,LEYTE",
+    "qualification": "Electrical Installation and Maintenance NC II",
+    "duration_type": "continuous",
+    "start_date": "2026-10-19",
+    "end_date": "2026-10-20",
+    "pax": 15,
+    "assessors": [
+      {
+        "name": "Gaudencio Regaton Saratan Jr.",
+        "assessor_type": "province"
+      }
+    ],
+    "assessor": "Gaudencio Regaton Saratan Jr.",
+    "assessor_type": "province",
+    "tesda_representative": "Judith T. Cinco",
+    "remarks": "PAYING",
+    "assessment_dates": [
+      "2026-10-19",
+      "2026-10-20"
+    ],
+    "approved_dates": [
+      {
+        "assessment_date": "2026-10-19",
+        "date": "2026-10-15"
+      },
+      {
+        "assessment_date": "2026-10-20",
+        "date": "2026-10-16"
+      }
+    ],
+    "schedule_reminder_dates": [
+      {
+        "assessment_date": "2026-10-19",
+        "date": "2026-10-15"
+      },
+      {
+        "assessment_date": "2026-10-20",
+        "date": "2026-10-16"
+      }
+    ],
+    "results_reminder_dates": [
+      {
+        "assessment_date": "2026-10-19",
+        "date": "2026-10-20"
+      },
+      {
+        "assessment_date": "2026-10-20",
+        "date": "2026-10-21"
+      }
+    ],
+    "created_at": "2026-10-19T09:00:11",
+    "updated_at": "2026-10-19T17:14:00"
+  },
+  {
+    "id": "3945e1be-e406-4388-98ee-b88123419fcc",
+    "assessment_center": "STC TECHNICAL TRAINING INSTITUTE INC.",
+    "qualification": "Bookkeeping NC III",
+    "duration_type": "single",
+    "start_date": "2026-10-18",
+    "end_date": "2026-10-18",
+    "pax": 10,
+    "assessors": [
+      {
+        "name": "Mikhaela Ysabelle Laplana Caores",
+        "assessor_type": "province"
+      }
+    ],
+    "assessor": "Mikhaela Ysabelle Laplana Caores",
+    "assessor_type": "province",
+    "tesda_representative": "Joan V. Abeñon",
+    "remarks": "PAYING",
+    "assessment_dates": [
+      "2026-10-18"
+    ],
+    "approved_dates": [
+      {
+        "assessment_date": "2026-10-18",
+        "date": "2026-10-16"
+      }
+    ],
+    "schedule_reminder_dates": [
+      {
+        "assessment_date": "2026-10-18",
+        "date": "2026-10-16"
+      }
+    ],
+    "results_reminder_dates": [
+      {
+        "assessment_date": "2026-10-18",
+        "date": "2026-10-19"
+      }
+    ],
+    "created_at": "2026-10-19T09:00:52",
+    "updated_at": "2026-10-19T17:13:52"
+  },
+  {
+    "id": "354df5d4-dd70-4520-8453-708b096b586f",
+    "assessment_center": "STI COLLEGE MAASIN, INC.",
+    "qualification": "Cookery NC II",
+    "duration_type": "continuous",
+    "start_date": "2026-10-21",
+    "end_date": "2026-10-22",
+    "pax": 16,
+    "assessors": [
+      {
+        "name": "Ma. Asuncion Bagolor Mendoza",
+        "assessor_type": "province"
+      }
+    ],
+    "assessor": "Ma. Asuncion Bagolor Mendoza",
+    "assessor_type": "province",
+    "tesda_representative": "",
+    "remarks": "STI Scholars",
+    "assessment_dates": [
+      "2026-10-21",
+      "2026-10-22"
+    ],
+    "approved_dates": [
+      {
+        "assessment_date": "2026-10-21",
+        "date": "2026-10-19"
+      },
+      {
+        "assessment_date": "2026-10-22",
+        "date": "2026-10-20"
+      }
+    ],
+    "schedule_reminder_dates": [
+      {
+        "assessment_date": "2026-10-21",
+        "date": "2026-10-19"
+      },
+      {
+        "assessment_date": "2026-10-22",
+        "date": "2026-10-20"
+      }
+    ],
+    "results_reminder_dates": [
+      {
+        "assessment_date": "2026-10-21",
+        "date": "2026-10-22"
+      },
+      {
+        "assessment_date": "2026-10-22",
+        "date": "2026-10-23"
+      }
+    ],
+    "created_at": "2026-10-19T17:05:40",
+    "updated_at": "2026-10-19T17:05:40"
   }
 ]
