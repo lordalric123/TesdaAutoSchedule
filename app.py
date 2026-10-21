@@ -19,7 +19,6 @@ from date_rules import calculate_derived_dates, parse_iso_date
 from excel_loader import ExcelRegistry
 from monitoring_export import (
     build_assessor_history_workbook,
-    build_finder_workbook,
     build_monitoring_workbook,
     build_monitoring_workbook_range,
 )
@@ -57,19 +56,6 @@ def resolve_data_dir() -> Path:
 DATA_DIR = resolve_data_dir()
 EXCEL_DIR = DATA_DIR / "excel"
 STATIC_DIR = ROOT / "static"
-
-if os.environ.get("APP_DATA_DIR"):
-    print(f"[startup] Using APP_DATA_DIR={DATA_DIR} (explicit override).", flush=True)
-elif DATA_DIR == PROJECT_DATA_DIR.resolve():
-    print(
-        f"[startup] Using the in-repo data directory ({DATA_DIR}). "
-        "This is correct for the git-authoritative workflow (data committed to GitHub, "
-        "Render redeploys with it baked in). If this deployment is meant to hold its "
-        "own independent data instead, set APP_DATA_DIR to a persistent disk.",
-        flush=True,
-    )
-else:
-    print(f"[startup] Using fallback data directory {DATA_DIR} (in-repo data/ folder not found).", flush=True)
 
 DEFAULT_CENTERS = EXCEL_DIR / "assessment_centers.xlsx"
 DEFAULT_PROVINCE_ASSESSORS = EXCEL_DIR / "competency_assessors.xlsx"
@@ -128,44 +114,14 @@ THEME_PRESETS = {
 }
 
 app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
-# Generous but not unlimited — guards against a stray huge upload while comfortably
-# covering real TMIS registry exports (typically well under a few MB). Without this,
-# a request over Werkzeug's own limits, or any unhandled server error, would fall
-# through to Flask's default HTML error page, which breaks the frontend's
-# `response.json()` calls with a confusing "Unexpected token '<'" error instead of a
-# real message.
-app.config["MAX_CONTENT_LENGTH"] = 64 * 1024 * 1024  # 64 MB
-
-
-@app.errorhandler(Exception)
-def handle_any_error(exc):
-    """Make sure every /api/* failure comes back as JSON, never Flask/Werkzeug's
-    default HTML error page. An HTML error page sent to a frontend `fetch(...).json()`
-    call produces a cryptic "Unexpected token '<' ... is not valid JSON" error instead
-    of the actual problem, which is what this prevents."""
-    from werkzeug.exceptions import HTTPException
-
-    if isinstance(exc, HTTPException):
-        code = exc.code or 500
-        message = exc.description or str(exc)
-    else:
-        code = 500
-        message = str(exc) or exc.__class__.__name__
-    if request.path.startswith("/api/"):
-        return jsonify({"ok": False, "error": message}), code
-    if isinstance(exc, HTTPException):
-        return exc
-    raise exc
-
-
 registry = ExcelRegistry()
 settings_store = JsonStore(
     DATA_DIR / "settings.json",
     {
-        "centers_path": DEFAULT_CENTERS.name,
-        "province_assessors_path": DEFAULT_PROVINCE_ASSESSORS.name,
-        "region_assessors_path": DEFAULT_REGION_ASSESSORS.name,
-        "assessors_path": DEFAULT_PROVINCE_ASSESSORS.name,
+        "centers_path": str(DEFAULT_CENTERS),
+        "province_assessors_path": str(DEFAULT_PROVINCE_ASSESSORS),
+        "region_assessors_path": str(DEFAULT_REGION_ASSESSORS),
+        "assessors_path": str(DEFAULT_PROVINCE_ASSESSORS),
         "theme": dict(DEFAULT_THEME),
     },
 )
@@ -182,33 +138,12 @@ def today() -> date:
     return date.today()
 
 
-def _filename_only(value: str | None, default: Path) -> str:
-    """settings.json stores just a filename (e.g. 'assessment_centers.xlsx'), resolved
-    against *this* environment's own EXCEL_DIR at load time — never a full path. A full
-    path baked into a committed settings.json would point at one machine's own folder
-    layout (e.g. a Windows path from someone's laptop) and silently fail to resolve on
-    any other machine or deployment, which is why Excel data kept "disappearing" on
-    Render even though the files themselves were committed to git.
-    """
-    value = (value or "").strip()
-    if not value:
-        return default.name
-    # Normalize both Windows ("\") and POSIX ("/") separators regardless of which OS
-    # is running right now — settings.json may have been written on a different OS
-    # than the one reading it, and pathlib.Path on Linux does not treat "\" as a
-    # separator, so a raw Path(...).name would return the whole Windows path intact.
-    normalized = value.replace("\\", "/")
-    name = normalized.rsplit("/", 1)[-1].strip()
-    return name or default.name
-
-
 def normalize_settings(raw: dict | None = None) -> dict:
     settings = dict(raw or settings_store.read())
-    settings["centers_path"] = _filename_only(settings.get("centers_path"), DEFAULT_CENTERS)
-    province_source = settings.get("province_assessors_path") or settings.get("assessors_path")
-    settings["province_assessors_path"] = _filename_only(province_source, DEFAULT_PROVINCE_ASSESSORS)
+    if not settings.get("province_assessors_path"):
+        settings["province_assessors_path"] = settings.get("assessors_path") or str(DEFAULT_PROVINCE_ASSESSORS)
     settings["assessors_path"] = settings["province_assessors_path"]
-    settings["region_assessors_path"] = _filename_only(settings.get("region_assessors_path"), DEFAULT_REGION_ASSESSORS)
+    settings.setdefault("region_assessors_path", str(DEFAULT_REGION_ASSESSORS))
     theme = dict(DEFAULT_THEME)
     theme.update(settings.get("theme") or {})
     settings["theme"] = theme
@@ -219,9 +154,9 @@ def load_registry() -> None:
     settings = normalize_settings()
     settings_store.write(settings)
     registry.load(
-        EXCEL_DIR / settings["centers_path"],
-        EXCEL_DIR / settings["province_assessors_path"],
-        EXCEL_DIR / settings.get("region_assessors_path"),
+        settings["centers_path"],
+        settings["province_assessors_path"],
+        settings.get("region_assessors_path"),
     )
 
 
@@ -248,21 +183,8 @@ def format_range(start: str, end: str) -> str:
 
 def normalize_assessors(payload: dict, existing: dict | None = None) -> list[dict]:
     """Build the assessors list from a payload, tolerating the old single-assessor shape."""
-def normalize_assessors(payload: dict, existing: dict | None = None) -> list[dict]:
-    """Build the assessors list from a payload, tolerating the old single-assessor shape.
-
-    An assessors list is optional — an assessment can be scheduled with a date
-    locked in before anyone is assigned. If the payload explicitly includes
-    "assessors" (even as an empty list), that's respected as-is, including
-    clearing out previously-assigned assessors. Only when the key is absent
-    entirely do we fall back to reconstructing from legacy fields / the
-    existing record, for backward compatibility with older callers.
-    """
-    if "assessors" in payload:
-        raw = payload.get("assessors")
-        if not isinstance(raw, list):
-            raw = []
-    else:
+    raw = payload.get("assessors")
+    if not isinstance(raw, list) or not raw:
         legacy_name = (payload.get("assessor") or "").strip()
         if legacy_name:
             raw = [{"name": legacy_name, "assessor_type": payload.get("assessor_type") or "province"}]
@@ -294,25 +216,20 @@ def normalize_assessors(payload: dict, existing: dict | None = None) -> list[dic
 
 def decorate(assessment: dict) -> dict:
     item = dict(assessment)
-    if "assessors" not in item:
-        # Legacy record from before multi-assessor support — migrate in place.
-        legacy_name = item.get("assessor", "")
-        item["assessors"] = (
-            [{"name": legacy_name, "assessor_type": _assessor_type_value(item)}] if legacy_name else []
-        )
-    if item["assessors"]:
-        item.setdefault("assessor", item["assessors"][0]["name"])
-        item.setdefault("assessor_type", item["assessors"][0]["assessor_type"])
-        item["assessor_type_label"] = "Region-Based" if item["assessors"][0]["assessor_type"] == "region" else "Province-Based"
-        item["assessors_label"] = "; ".join(
-            f"{a['name']} ({'Region-Based' if a['assessor_type'] == 'region' else 'Province-Based'})"
-            for a in item["assessors"]
-        )
-    else:
-        item["assessor"] = ""
-        item["assessor_type"] = ""
-        item["assessor_type_label"] = "Not yet assigned"
-        item["assessors_label"] = "Not yet assigned"
+    if not item.get("assessors"):
+        item["assessors"] = [
+            {
+                "name": item.get("assessor", ""),
+                "assessor_type": _assessor_type_value(item),
+            }
+        ]
+    item.setdefault("assessor", item["assessors"][0]["name"])
+    item.setdefault("assessor_type", item["assessors"][0]["assessor_type"])
+    item["assessor_type_label"] = "Region-Based" if item["assessor_type"] == "region" else "Province-Based"
+    item["assessors_label"] = "; ".join(
+        f"{a['name']} ({'Region-Based' if a['assessor_type'] == 'region' else 'Province-Based'})"
+        for a in item["assessors"]
+    )
     item.setdefault("remarks", "")
     item["date_label"] = format_range(item["start_date"], item["end_date"])
     item["approved_date_list"] = unique_dates(item["approved_dates"])
@@ -334,15 +251,16 @@ def build_assessment(payload: dict, existing: dict | None = None) -> dict:
     pax = int(payload.get("pax") or 0)
     if pax < 1:
         raise ValueError("Number of pax must be at least 1.")
-    # Assessors are optional: a date can be locked in — and its reminder dates
-    # calculated — before anyone has been assigned to conduct it yet.
     assessors = normalize_assessors(payload, existing)
     representative = (payload.get("tesda_representative") or "").strip()
     remarks = (payload.get("remarks") or "").strip()
     if not center or not qualification:
         raise ValueError("Assessment center and qualification are required.")
+    if not assessors:
+        raise ValueError("At least one assessor is required.")
 
     derived = calculate_derived_dates(start, end, duration_type)
+    approved_dates = apply_approved_date_overrides(derived["approved_dates"], payload.get("approved_dates"))
     now = datetime.now().isoformat(timespec="seconds")
     return {
         "id": existing["id"] if existing else str(uuid.uuid4()),
@@ -354,17 +272,49 @@ def build_assessment(payload: dict, existing: dict | None = None) -> dict:
         "pax": pax,
         "assessors": assessors,
         # legacy single-assessor fields kept in sync for any old code/exports that read them
-        "assessor": assessors[0]["name"] if assessors else "",
-        "assessor_type": assessors[0]["assessor_type"] if assessors else "",
+        "assessor": assessors[0]["name"],
+        "assessor_type": assessors[0]["assessor_type"],
         "tesda_representative": representative,
         "remarks": remarks,
         "assessment_dates": derived["assessment_dates"],
-        "approved_dates": derived["approved_dates"],
-        "schedule_reminder_dates": derived["schedule_reminder_dates"],
+        "approved_dates": approved_dates,
+        # schedule reminders mirror the (possibly manually edited) approved/portal-schedule dates
+        "schedule_reminder_dates": approved_dates,
         "results_reminder_dates": derived["results_reminder_dates"],
         "created_at": existing["created_at"] if existing else now,
         "updated_at": now,
     }
+
+
+def apply_approved_date_overrides(auto_pairs: list[dict], provided: list | None) -> list[dict]:
+    """Use the auto-calculated portal-schedule ("approved") date for each assessment date,
+    unless the caller explicitly supplied a different date for that assessment date — in which
+    case the manual date is kept and the pair is flagged so the UI can show it was edited.
+    """
+    provided_map: dict[str, str] = {}
+    for row in provided or []:
+        if not isinstance(row, dict):
+            continue
+        a_date = (row.get("assessment_date") or "").strip()
+        chosen = (row.get("date") or "").strip()
+        if a_date and chosen:
+            provided_map[a_date] = chosen
+
+    result = []
+    for pair in auto_pairs:
+        a_date = pair["assessment_date"]
+        auto_date = pair["date"]
+        chosen = provided_map.get(a_date, auto_date)
+        try:
+            parse_iso_date(chosen)
+        except Exception:
+            raise ValueError(f"Invalid approved date: {chosen}")
+        result.append({
+            "assessment_date": a_date,
+            "date": chosen,
+            "manual": chosen != auto_date,
+        })
+    return result
 
 
 def get_assessment(assessment_id: str) -> dict | None:
@@ -534,8 +484,6 @@ def calendar_events(calendar_type: str, year: int, month: int) -> dict[str, list
                             "title": "Create portal schedule",
                             "detail": f"Create portal schedule for {format_range(pair['assessment_date'], pair['assessment_date'])}.",
                             "assessment": item,
-                            "assessment_date": pair["assessment_date"],
-                            "date": event_date,
                             "task_id": tid,
                             "done": bool(statuses.get(tid, {}).get("done")),
                         }
@@ -551,8 +499,6 @@ def calendar_events(calendar_type: str, year: int, month: int) -> dict[str, list
                             "title": "Results reminder",
                             "detail": f"Show/submit results for the assessment conducted on {format_range(pair['assessment_date'], pair['assessment_date'])}.",
                             "assessment": item,
-                            "assessment_date": pair["assessment_date"],
-                            "date": event_date,
                             "task_id": tid,
                             "done": bool(statuses.get(tid, {}).get("done")),
                         }
@@ -571,7 +517,6 @@ def calendar_events(calendar_type: str, year: int, month: int) -> dict[str, list
                                 "title": item["qualification"],
                                 "detail": item["date_label"],
                                 "assessment": item,
-                                "assessment_date": item["start_date"],
                                 "range_id": item["id"],
                                 "task_id": tid,
                                 "done": done,
@@ -595,13 +540,10 @@ def health():
     return jsonify({"ok": True, "today": today().isoformat()})
 
 
-MIRROR_MODE = os.environ.get("MIRROR_MODE", "").strip().lower() in {"1", "true", "yes"}
-
-
 @app.get("/api/settings")
 def get_settings():
     settings = normalize_settings()
-    return jsonify({**settings, **registry.summary(), "theme_presets": THEME_PRESETS, "mirror_mode": MIRROR_MODE})
+    return jsonify({**settings, **registry.summary(), "theme_presets": THEME_PRESETS})
 
 
 @app.post("/api/settings/theme")
@@ -635,33 +577,6 @@ def reset_theme():
     return jsonify({"ok": True, "theme": settings["theme"]})
 
 
-@app.post("/api/assessments/recalculate-dates")
-def recalculate_dates():
-    """Re-run calculate_derived_dates for every stored assessment using the
-    current date_rules.py logic, and save the results. Needed whenever the
-    scheduling rules themselves change — dates are computed once at
-    create/edit time and stored, so a rule fix alone doesn't touch assessments
-    that already existed before the fix.
-    """
-    items = assessments_store.read()
-    changed = 0
-    for item in items:
-        start = parse_iso_date(item["start_date"])
-        end = parse_iso_date(item["end_date"])
-        derived = calculate_derived_dates(start, end, item["duration_type"])
-        if (
-            item.get("approved_dates") != derived["approved_dates"]
-            or item.get("results_reminder_dates") != derived["results_reminder_dates"]
-        ):
-            changed += 1
-        item["assessment_dates"] = derived["assessment_dates"]
-        item["approved_dates"] = derived["approved_dates"]
-        item["schedule_reminder_dates"] = derived["schedule_reminder_dates"]
-        item["results_reminder_dates"] = derived["results_reminder_dates"]
-    assessments_store.write(items)
-    return jsonify({"ok": True, "total": len(items), "changed": changed})
-
-
 @app.post("/api/settings/reload")
 def reload_data():
     try:
@@ -689,37 +604,16 @@ def upload_excel():
         "region": "region_assessors.xlsx",
     }[kind]
     dest = EXCEL_DIR / dest_name
-    tmp_dest = dest.with_suffix(dest.suffix + ".tmp")
-    try:
-        EXCEL_DIR.mkdir(parents=True, exist_ok=True)
-        # Save to a temp file first and swap it in. This avoids ever leaving dest
-        # half-written if the upload fails partway, and on most systems a rename can
-        # succeed even in cases a direct overwrite would not.
-        uploaded.save(tmp_dest)
-        os.replace(tmp_dest, dest)
-    except PermissionError:
-        tmp_dest.unlink(missing_ok=True)
-        return jsonify({
-            "ok": False,
-            "error": (
-                f"Could not save {dest_name} — Windows says it's locked by another "
-                "program. This almost always means the file is currently open in "
-                "Excel (or still syncing in OneDrive/Dropbox). Close it — and check "
-                f"for a hidden lock file named ~${dest_name} in the same folder — "
-                "then try uploading again."
-            ),
-        }), 400
-    except OSError as exc:
-        tmp_dest.unlink(missing_ok=True)
-        return jsonify({"ok": False, "error": f"Could not save the uploaded file: {exc}"}), 400
+    EXCEL_DIR.mkdir(parents=True, exist_ok=True)
+    uploaded.save(dest)
     settings = normalize_settings()
     if kind == "centers":
-        settings["centers_path"] = dest_name
+        settings["centers_path"] = str(dest)
     elif kind == "region":
-        settings["region_assessors_path"] = dest_name
+        settings["region_assessors_path"] = str(dest)
     else:
-        settings["province_assessors_path"] = dest_name
-        settings["assessors_path"] = dest_name
+        settings["province_assessors_path"] = str(dest)
+        settings["assessors_path"] = str(dest)
     settings_store.write(settings)
     try:
         load_registry()
@@ -774,24 +668,6 @@ def finder():
             "assessor_count": len(result["assessors"]),
             "center_count": len(result["centers"]),
         }
-    )
-
-
-@app.get("/api/finder/export")
-def export_finder():
-    qualification = (request.args.get("qualification") or "").strip()
-    if not qualification:
-        return jsonify({"error": "Select a qualification first."}), 400
-    province = registry.assessors(qualification, "province")
-    region = registry.assessors(qualification, "region")
-    buffer = build_finder_workbook(qualification, province, region)
-    stamp = datetime.now().strftime("%Y%m%d")
-    filename = secure_filename(f"Assessors_{qualification}_{stamp}.xlsx") or f"Assessors_{stamp}.xlsx"
-    return send_file(
-        buffer,
-        as_attachment=True,
-        download_name=filename,
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
 
@@ -879,36 +755,6 @@ def update_assessment(assessment_id: str):
     items = [item if row["id"] == assessment_id else row for row in assessments_store.read()]
     assessments_store.write(items)
     return jsonify(decorate(item))
-
-
-@app.post("/api/assessments/<assessment_id>/quick-update")
-def quick_update_assessment(assessment_id: str):
-    """Lightweight update for just the assessor(s) and/or TESDA representative —
-    used by the compact task cards on the Dashboard and Calendar so filling in an
-    assessor doesn't require opening the full Scheduler form. Unlike the PUT route,
-    this never touches dates/center/qualification, so there's nothing to re-validate.
-    """
-    payload = request.get_json(force=True) or {}
-    items = assessments_store.read()
-    existing = next((row for row in items if row["id"] == assessment_id), None)
-    if not existing:
-        return jsonify({"error": "Assessment not found."}), 404
-
-    if "assessors" in payload:
-        try:
-            assessors = normalize_assessors({"assessors": payload["assessors"]})
-        except ValueError as exc:
-            return jsonify({"error": str(exc)}), 400
-        existing["assessors"] = assessors
-        existing["assessor"] = assessors[0]["name"] if assessors else ""
-        existing["assessor_type"] = assessors[0]["assessor_type"] if assessors else ""
-
-    if "tesda_representative" in payload:
-        existing["tesda_representative"] = (payload.get("tesda_representative") or "").strip()
-
-    existing["updated_at"] = datetime.now().isoformat(timespec="seconds")
-    assessments_store.write(items)
-    return jsonify(decorate(existing))
 
 
 @app.delete("/api/assessments/<assessment_id>")
@@ -1037,18 +883,52 @@ def toggle_task():
 def export_assessor_history():
     qualification = (request.args.get("qualification") or "").strip()
     assessor_type = request.args.get("assessor_type") or ""
+    start_date_arg = (request.args.get("start_date") or "").strip()
+    end_date_arg = (request.args.get("end_date") or "").strip()
     try:
         data = build_assessor_rotation(assessments_store.read(), registry, qualification, assessor_type)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
+
+    assessment_log = data["assessment_log"]
+    range_start = range_end = None
+    if start_date_arg or end_date_arg:
+        try:
+            range_start = parse_iso_date(start_date_arg) if start_date_arg else None
+            range_end = parse_iso_date(end_date_arg) if end_date_arg else None
+        except Exception:
+            return jsonify({"error": "Invalid start or end date."}), 400
+        if range_start and range_end and range_end < range_start:
+            return jsonify({"error": "End date must be on or after the start date."}), 400
+
+        def in_range(item: dict) -> bool:
+            item_start = parse_iso_date(item["start_date"])
+            item_end = parse_iso_date(item.get("end_date") or item["start_date"])
+            if range_start and item_end < range_start:
+                return False
+            if range_end and item_start > range_end:
+                return False
+            return True
+
+        assessment_log = [item for item in assessment_log if in_range(item)]
+
     title = f"Assessor History — {qualification}" if qualification else "Assessor History — All Qualifications"
-    buffer = build_assessor_history_workbook(data["assessment_log"], title=title)
+    if range_start or range_end:
+        range_label = (
+            f"{range_start.strftime('%b %d, %Y') if range_start else 'Start'} – "
+            f"{range_end.strftime('%b %d, %Y') if range_end else 'Present'}"
+        )
+        title = f"{title} ({range_label})"
+    buffer = build_assessor_history_workbook(assessment_log, title=title)
     stamp = datetime.now().strftime("%Y%m%d")
     name_bits = ["Assessor_History"]
     if qualification:
         name_bits.append(qualification)
     if assessor_type:
         name_bits.append(assessor_type)
+    if range_start or range_end:
+        name_bits.append(range_start.isoformat() if range_start else "start")
+        name_bits.append(range_end.isoformat() if range_end else "present")
     name_bits.append(stamp)
     filename = secure_filename("_".join(name_bits) + ".xlsx")
     return send_file(
@@ -1073,6 +953,7 @@ def reports():
             or query in item["qualification"].casefold()
             or any(query in a["name"].casefold() for a in item["assessors"])
             or query in item["tesda_representative"].casefold()
+            or query in (item.get("remarks") or "").casefold()
         ]
     items.sort(key=lambda x: x["start_date"])
     return jsonify({"year": year, "month": month, "items": items})
@@ -1089,82 +970,58 @@ def assessor_rotation():
     return jsonify(data)
 
 
-def _parse_year_month(value: str) -> tuple[int, int]:
-    year_str, month_str = value.strip().split("-", 1)
-    year, month = int(year_str), int(month_str)
-    if month not in range(1, 13):
-        raise ValueError("Month must be 1-12.")
-    return year, month
-
-
-def _month_sequence(start: tuple[int, int], end: tuple[int, int]) -> list[tuple[int, int]]:
-    if start > end:
-        raise ValueError("End month must be on or after the start month.")
-    months = []
-    year, month = start
-    while (year, month) <= end:
-        months.append((year, month))
-        month += 1
-        if month > 12:
-            month = 1
-            year += 1
-        if len(months) > 36:
-            raise ValueError("Range is too large (36 months max).")
-    return months
-
-
 @app.get("/api/reports/export")
 def export_reports():
-    start_param = request.args.get("start")
-    end_param = request.args.get("end")
+    year = int(request.args.get("year", today().year))
+    month = int(request.args.get("month", today().month))
+    items = [decorate(item) for item in assessments_store.read() if overlaps_month(item, year, month)]
+    items.sort(key=lambda x: x["start_date"])
+    buffer = build_monitoring_workbook(year, month, items)
+    filename = f"Assessment_Schedule_{date(year, month, 1).strftime('%B_%Y')}.xlsx"
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
-    if start_param and end_param:
-        try:
-            months = _month_sequence(_parse_year_month(start_param), _parse_year_month(end_param))
-        except ValueError as exc:
-            return jsonify({"error": str(exc)}), 400
 
-        all_assessments = assessments_store.read()
-        # Each assessment is placed in exactly one sheet, never repeated across
-        # months just because its date range happens to straddle a month boundary
-        # (e.g. September 29 - October 2). It goes to the month its start date
-        # falls in when that month is part of the export; otherwise — if it
-        # started before the exported range but still runs into it — it goes to
-        # the earliest exported month it overlaps.
-        months_set = set(months)
-        buckets: dict[tuple[int, int], list[dict]] = {ym: [] for ym in months}
-        for item in all_assessments:
-            start = parse_iso_date(item["start_date"])
-            start_month = (start.year, start.month)
-            if start_month in months_set:
-                target = start_month
-            else:
-                target = next((ym for ym in months if overlaps_month(item, *ym)), None)
-            if target is not None:
-                buckets[target].append(decorate(item))
+@app.get("/api/reports/export-range")
+def export_reports_range():
+    start_year = int(request.args.get("start_year", today().year))
+    start_month = int(request.args.get("start_month", today().month))
+    end_year = int(request.args.get("end_year", start_year))
+    end_month = int(request.args.get("end_month", start_month))
 
-        month_payload = []
-        for year, month in months:
-            items = buckets[(year, month)]
-            items.sort(key=lambda x: x["start_date"])
-            month_payload.append((year, month, items))
+    if not (1 <= start_month <= 12) or not (1 <= end_month <= 12):
+        return jsonify({"error": "Month must be between 1 and 12."}), 400
+    start_index = start_year * 12 + (start_month - 1)
+    end_index = end_year * 12 + (end_month - 1)
+    if end_index < start_index:
+        return jsonify({"error": "End month must be on or after the start month."}), 400
+    if end_index - start_index > 23:
+        return jsonify({"error": "Choose a range of 24 months or fewer."}), 400
 
-        buffer = build_monitoring_workbook_range(month_payload)
-        start_label = date(*months[0], 1).strftime("%B_%Y")
-        end_label = date(*months[-1], 1).strftime("%B_%Y")
-        filename = (
-            f"Assessment_Schedule_{start_label}.xlsx"
-            if start_label == end_label
-            else f"Assessment_Schedule_{start_label}_to_{end_label}.xlsx"
-        )
-    else:
-        year = int(request.args.get("year", today().year))
-        month = int(request.args.get("month", today().month))
-        items = [decorate(item) for item in assessments_store.read() if overlaps_month(item, year, month)]
-        items.sort(key=lambda x: x["start_date"])
-        buffer = build_monitoring_workbook(year, month, items)
-        filename = f"Assessment_Schedule_{date(year, month, 1).strftime('%B_%Y')}.xlsx"
+    range_start = date(start_year, start_month, 1)
+    range_end_month_start = date(end_year, end_month, 1)
+    range_end = date(end_year + 1, 1, 1) if end_month == 12 else date(end_year, end_month + 1, 1)
 
+    items = []
+    for item in assessments_store.read():
+        decorated = decorate(item)
+        start = parse_iso_date(decorated["start_date"])
+        end = parse_iso_date(decorated["end_date"])
+        if start < range_end and end >= range_start:
+            items.append(decorated)
+
+    buffer = build_monitoring_workbook_range(start_year, start_month, end_year, end_month, items)
+    start_label = range_start.strftime("%b%Y")
+    end_label = range_end_month_start.strftime("%b%Y")
+    filename = (
+        f"Assessment_Schedule_{start_label}.xlsx"
+        if start_label == end_label
+        else f"Assessment_Schedule_{start_label}-{end_label}.xlsx"
+    )
     return send_file(
         buffer,
         as_attachment=True,
@@ -1200,7 +1057,7 @@ def export_backup():
             "excel/competency_assessors.xlsx": settings.get("province_assessors_path") or settings.get("assessors_path"),
             "excel/region_assessors.xlsx": settings.get("region_assessors_path"),
         }.items():
-            path = EXCEL_DIR / path_value if path_value else None
+            path = Path(path_value) if path_value else None
             if path and path.exists():
                 archive.write(path, label)
     buffer.seek(0)

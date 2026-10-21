@@ -4,14 +4,14 @@ const state = {
   representatives: [],
   assessments: [],
   calendar: { type: "approved", year: new Date().getFullYear(), month: new Date().getMonth() + 1, payload: null },
-  finder: { query: "", selected: "", source: "", tab: "assessors", picked: { assessment_center: "", assessor: "", assessor_type: "province" } },
+  finder: { query: "", selected: "", source: "province", picked: null },
   report: { year: new Date().getFullYear(), month: new Date().getMonth() + 1, q: "" },
-  history: { qualification: "", assessor_type: "", tab: "log" },
+  history: { qualification: "", assessor_type: "province", tab: "log" },
+  schedulerPage: 1,
+  reportPage: 1,
   theme: null,
   editingId: null,
   prefill: null,
-  expandedTasks: new Set(),
-  recordsSort: "added_desc",
 };
 
 const titles = {
@@ -27,6 +27,37 @@ const titles = {
 
 const monthNames = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 
+const PAGE_SIZE = 10;
+
+function paginate(items, page) {
+  const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+  const start = (safePage - 1) * PAGE_SIZE;
+  return { pageItems: items.slice(start, start + PAGE_SIZE), page: safePage, totalPages };
+}
+
+function bindPaginationControls(containerId, onPrev, onNext) {
+  const container = $(containerId);
+  if (!container) return;
+  const prev = container.querySelector("[data-page-prev]");
+  const next = container.querySelector("[data-page-next]");
+  if (prev && !prev.disabled) prev.addEventListener("click", onPrev);
+  if (next && !next.disabled) next.addEventListener("click", onNext);
+}
+
+function paginationControls(idPrefix, page, totalPages, total) {
+  if (total <= PAGE_SIZE) return "";
+  return `
+    <div class="pagination" data-pagination="${idPrefix}">
+      <span class="muted">Page ${page} of ${totalPages} · ${total} total</span>
+      <div class="row-actions">
+        <button type="button" class="ghost" data-page-prev ${page <= 1 ? "disabled" : ""}>Previous</button>
+        <button type="button" class="ghost" data-page-next ${page >= totalPages ? "disabled" : ""}>Next</button>
+      </div>
+    </div>
+  `;
+}
+
 async function api(path, options = {}) {
   const res = await fetch(path, options);
   if (!res.ok) {
@@ -40,26 +71,6 @@ async function api(path, options = {}) {
   const contentType = res.headers.get("content-type") || "";
   if (contentType.includes("application/json")) return res.json();
   return res;
-}
-
-// Safely reads a fetch Response that's expected to be JSON. Used for the couple of
-// upload flows that post raw FormData instead of going through api(), so a
-// non-JSON response (a server crash page, a proxy timeout page, etc.) surfaces a
-// readable message instead of crashing with "Unexpected token '<' ... is not valid
-// JSON" on res.json().
-async function readJsonResponse(res) {
-  const text = await res.text();
-  try {
-    return JSON.parse(text);
-  } catch {
-    const snippet = text.replace(/\s+/g, " ").trim().slice(0, 160);
-    const status = `${res.status} ${res.statusText}`.trim();
-    throw new Error(
-      snippet
-        ? `Server error (${status}): ${snippet}${text.length > 160 ? "…" : ""}`
-        : `Server error (${status}) with no details.`
-    );
-  }
 }
 
 function $(id) { return document.getElementById(id); }
@@ -133,21 +144,6 @@ async function refreshLookups() {
   state.centers = await api("/api/centers");
   state.representatives = await api("/api/representatives");
   state.assessments = await api("/api/assessments");
-  updateRepDatalist();
-}
-
-// A single persistent <datalist>, kept in sync whenever representatives are
-// (re)loaded, so every inline TESDA-rep input across the app (Dashboard task
-// cards, Calendar day modal, Scheduler form) can share one "rep-options-inline"
-// id without ever having two of the same id in the DOM at once.
-function updateRepDatalist() {
-  let list = document.getElementById("rep-options-inline");
-  if (!list) {
-    list = document.createElement("datalist");
-    list.id = "rep-options-inline";
-    document.body.appendChild(list);
-  }
-  list.innerHTML = state.representatives.map((r) => `<option value="${escapeHtml(r.name)}"></option>`).join("");
 }
 
 function switchView(view, extra) {
@@ -182,158 +178,27 @@ async function render(extra) {
   }
 }
 
-// ---- Shared compact task-card component (Dashboard + Calendar day view) ----
-
-function fmtShort(iso) {
-  if (!iso) return "—";
-  const d = new Date(`${iso}T00:00:00`);
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
-// Normalizes a dashboard item or a calendar event into one consistent shape.
-function taskCardModel(raw, kind) {
-  if (kind === "assessment") {
-    const a = raw.assessment || raw;
-    return {
-      taskId: raw.task_id,
-      done: !!raw.done,
-      kind: "assessment",
-      scheduleByDate: null,
-      assessmentDate: raw.assessment_date || a.start_date,
-      assessmentDateLabel: a.date_label,
-      qualification: a.qualification,
-      assessmentCenter: a.assessment_center,
-      pax: a.pax,
-      assessors: a.assessors || [],
-      tesdaRepresentative: a.tesda_representative || "",
-      assessmentId: a.id,
-    };
-  }
-  const a = raw.assessment;
-  return {
-    taskId: raw.task_id,
-    done: !!raw.done,
-    kind,
-    scheduleByDate: raw.date || null,
-    assessmentDate: raw.assessment_date,
-    assessmentDateLabel: fmt(raw.assessment_date),
-    qualification: a.qualification,
-    assessmentCenter: a.assessment_center,
-    pax: a.pax,
-    assessors: a.assessors || [],
-    tesdaRepresentative: a.tesda_representative || "",
-    assessmentId: a.id,
-  };
-}
-
-const KIND_LABEL = { schedule: "Schedule", results: "Results", assessment: "Assessment" };
-const KIND_CLASS = { schedule: "", results: "rose", assessment: "gold" };
-
-function renderTaskCard(m) {
-  const expanded = state.expandedTasks.has(m.taskId);
-  const dateLine = m.kind === "assessment"
-    ? fmtShort(m.assessmentDate)
-    : `${fmtShort(m.scheduleByDate)} → ${fmtShort(m.assessmentDate)}`;
-  const assessorNames = m.assessors.length ? m.assessors.map((a) => a.name).join(", ") : "Unassigned";
-
-  const body = !expanded ? "" : `
-    <div class="task-card-body">
-      ${m.kind !== "assessment" ? `<div class="task-detail-row"><span class="task-detail-label">Create schedule by</span><span>${escapeHtml(fmt(m.scheduleByDate))}</span></div>` : ""}
-      <div class="task-detail-row"><span class="task-detail-label">${m.kind === "assessment" ? "Assessment date" : "For assessment on"}</span><span>${escapeHtml(m.assessmentDateLabel || fmt(m.assessmentDate))}</span></div>
-      <div class="task-detail-row"><span class="task-detail-label">Center</span><span>${escapeHtml(m.assessmentCenter || "—")} · ${m.pax || 0} pax</span></div>
-      <div class="task-detail-row">
-        <span class="task-detail-label">Assessor(s)</span>
-        <span class="task-chip-list">
-          ${m.assessors.length
-            ? m.assessors.map((a) => `<span class="chip">${escapeHtml(a.name)} <small class="muted">(${a.assessor_type === "region" ? "Region" : "Province"})</small></span>`).join("")
-            : `<span class="muted">Not yet assigned</span>`}
-        </span>
-      </div>
-      <div class="task-detail-row"><span class="task-detail-label">TESDA Rep</span><span>${escapeHtml(m.tesdaRepresentative || "—")}</span></div>
-      <div class="row-actions" style="margin-top:8px">
-        <button type="button" class="ghost" data-open-assessment="${escapeHtml(m.assessmentId)}">View / edit assessment</button>
-      </div>
-    </div>
-  `;
-
-  return `
-    <div class="task-card ${m.done ? "task-card-done" : ""}" data-qualification-preload="${escapeHtml(m.qualification)}">
-      <div class="task-card-head">
-        <input type="checkbox" data-task-toggle="${escapeHtml(m.taskId)}" ${m.done ? "checked" : ""} />
-        <span class="chip ${KIND_CLASS[m.kind]}" style="flex:none">${KIND_LABEL[m.kind]}</span>
-        <div class="task-card-summary" data-task-expand-toggle="${escapeHtml(m.taskId)}">
-          <b>${escapeHtml(m.qualification)}</b>
-          <span class="muted">${dateLine} · ${escapeHtml(m.assessmentCenter || "—")} · ${escapeHtml(assessorNames)}</span>
-        </div>
-        <button type="button" class="ghost task-chevron" data-task-expand-toggle="${escapeHtml(m.taskId)}">${expanded ? "▲" : "▼"}</button>
-      </div>
-      ${body}
-    </div>
-  `;
-}
-
-function renderTaskCardGroup(models, emptyMessage) {
-  if (!models.length) return `<p class="empty">${escapeHtml(emptyMessage || "Nothing here.")}</p>`;
-  return `<div class="task-card-list">${models.map(renderTaskCard).join("")}</div>`;
-}
-
-// Wires every task card's interactive bits inside `container`. `refresh` is called
-// after any successful change (toggle) so the caller can re-fetch its own data;
-// expand/collapse state survives because it's tracked by task_id in
-// state.expandedTasks, not by DOM node. Editing assessors/TESDA rep is no
-// longer done inline here — "View / edit assessment" sends the person to the
-// full Scheduler for that.
-function bindTaskCards(container, refresh) {
-  container.querySelectorAll("[data-task-toggle]").forEach((box) => {
-    box.addEventListener("change", async () => {
-      const taskId = box.dataset.taskToggle;
-      const done = box.checked;
-      try {
-        await api("/api/tasks/toggle", { method: "POST", headers: jsonHeaders(), body: JSON.stringify({ task_id: taskId, done }) });
-      } catch (err) {
-        toast(err.message, "error");
-        box.checked = !done;
-        return;
-      }
-      toast(done ? "Marked as done." : "Marked as not done.");
-      refresh();
-    });
-  });
-
-  container.querySelectorAll("[data-task-expand-toggle]").forEach((el) => {
-    el.addEventListener("click", () => {
-      const taskId = el.dataset.taskExpandToggle;
-      if (state.expandedTasks.has(taskId)) state.expandedTasks.delete(taskId);
-      else state.expandedTasks.add(taskId);
-      refresh();
-    });
-  });
-
-  container.querySelectorAll("[data-open-assessment]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      closeModal();
-      state.editingId = btn.dataset.openAssessment;
-      switchView("scheduler");
-    });
-  });
-}
-
-// Tracks the models from the most recent render, kept around in case other
-// code needs to look up a card's current data by task_id.
-let lastRenderedCardModels = {};
-function trackCardModels(models) {
-  models.forEach((m) => { lastRenderedCardModels[m.taskId] = m; });
+function taskChecklist(items, kind) {
+  if (!items.length) return `<p class="empty">Nothing due in this group.</p>`;
+  return items.map((item) => {
+    const a = item.assessment || item;
+    const detail = kind === "schedule"
+      ? `Create portal schedule for ${fmt(item.assessment_date)}`
+      : kind === "results"
+        ? `Submit results for ${fmt(item.assessment_date)}`
+        : a.date_label;
+    return `<div class="task ${item.done ? "task-done" : ""}">
+      <label class="task-check">
+        <input type="checkbox" data-dash-task-id="${escapeHtml(item.task_id)}" ${item.done ? "checked" : ""} />
+        <b>${escapeHtml(detail)}</b>
+      </label>
+      <span>${escapeHtml(a.assessment_center)} · ${escapeHtml(a.qualification)}</span>
+    </div>`;
+  }).join("");
 }
 
 async function renderDashboard() {
-  await refreshLookups();
   const data = await api("/api/dashboard");
-
-  const scheduleModels = data.schedule_today.map((raw) => taskCardModel(raw, "schedule"));
-  const resultsModels = data.results_today.map((raw) => taskCardModel(raw, "results"));
-  const todayModels = data.assessments_today.map((raw) => taskCardModel(raw, "assessment"));
-  const upcomingModels = data.upcoming.map((raw) => taskCardModel(raw, "assessment"));
-  trackCardModels([...scheduleModels, ...resultsModels, ...todayModels, ...upcomingModels]);
 
   $("view-dashboard").innerHTML = `
     <div class="grid stats">
@@ -345,17 +210,33 @@ async function renderDashboard() {
     <div class="grid two" style="margin-top:16px">
       <div class="card">
         <h3>Today's tasks</h3>
-        ${renderTaskCardGroup([...scheduleModels, ...resultsModels], "Nothing due today.")}
+        <p class="hint">Portal schedule reminders and results due ${fmt(data.today)}. Check them off once done.</p>
+        ${taskChecklist(data.schedule_today, "schedule")}
+        ${taskChecklist(data.results_today, "results")}
       </div>
       <div class="card">
         <h3>Today's assessments</h3>
-        ${renderTaskCardGroup(todayModels, "No assessments today.")}
+        ${taskChecklist(data.assessments_today, "assessment")}
         <h3 style="margin-top:18px">Upcoming</h3>
-        ${renderTaskCardGroup(upcomingModels, "Nothing upcoming.")}
+        ${taskChecklist(data.upcoming, "assessment")}
       </div>
     </div>
   `;
-  bindTaskCards($("view-dashboard"), renderDashboard);
+  document.querySelectorAll("[data-dash-task-id]").forEach((box) => {
+    box.addEventListener("change", async () => {
+      const taskIdValue = box.dataset.dashTaskId;
+      const wasChecked = box.checked;
+      try {
+        await api("/api/tasks/toggle", { method: "POST", headers: jsonHeaders(), body: JSON.stringify({ task_id: taskIdValue, done: wasChecked }) });
+      } catch (err) {
+        toast(err.message, "error");
+        box.checked = !wasChecked;
+        return;
+      }
+      toast(wasChecked ? "Marked as done." : "Marked as not done.");
+      renderDashboard();
+    });
+  });
   maybeNotify(data);
 }
 
@@ -363,6 +244,62 @@ function fmt(iso) {
   if (!iso) return "—";
   const d = new Date(`${iso}T00:00:00`);
   return d.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
+}
+
+// --- Date math mirroring date_rules.py, used to preview/edit the Approved
+// (portal schedule) dates client-side before the record is saved. ---
+function parseLocalDate(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+function toISODate(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+function addDays(date, delta) {
+  const d = new Date(date);
+  d.setDate(d.getDate() + delta);
+  return d;
+}
+function isWeekendDate(date) {
+  const day = date.getDay();
+  return day === 0 || day === 6;
+}
+function previousBusinessDay(date) {
+  let c = addDays(date, -1);
+  while (isWeekendDate(c)) c = addDays(c, -1);
+  return c;
+}
+function scheduleReminderDate(date, durationType) {
+  if (durationType === "single") {
+    let r = date;
+    for (let i = 0; i < 2; i++) r = previousBusinessDay(r);
+    return r;
+  }
+  return addDays(date, -2);
+}
+function assessmentDateRange(startIso, endIso) {
+  const start = parseLocalDate(startIso);
+  const end = parseLocalDate(endIso || startIso);
+  const dates = [];
+  let cur = start;
+  while (cur <= end) {
+    dates.push(toISODate(cur));
+    cur = addDays(cur, 1);
+  }
+  return dates;
+}
+function calculatedApprovedDates(startIso, endIso, durationType) {
+  if (!startIso) return [];
+  const assessmentDates = durationType === "continuous" && endIso
+    ? assessmentDateRange(startIso, endIso)
+    : [startIso];
+  return assessmentDates.map((iso) => ({
+    assessment_date: iso,
+    date: toISODate(scheduleReminderDate(parseLocalDate(iso), durationType)),
+  }));
 }
 
 function defaultAssessorRows() {
@@ -376,7 +313,7 @@ async function renderScheduler(extra) {
   const current = editing || {
     assessment_center: prefill.assessment_center || "",
     qualification: prefill.qualification || "",
-    duration_type: "continuous",
+    duration_type: "single",
     start_date: "",
     end_date: "",
     pax: "",
@@ -403,105 +340,8 @@ async function renderScheduler(extra) {
   let assessorRows = startingAssessorRows.map((row) => ({
     assessor_type: row.assessor_type === "region" ? "region" : "province",
     assessor: row.assessor || "",
+    custom: Boolean(row.custom),
   }));
-
-  // Approved (schedule reminder) dates are normally auto-calculated, one per
-  // assessment day, but can be hand-edited here for a special exemption — the
-  // backend keeps whichever ones actually differ from its own calculation and
-  // flags the record as manually overridden so "Recalculate all assessment
-  // dates" in Settings leaves it alone.
-  let approvedRows = [];
-  let defaultApprovedByDate = {};
-  async function fetchDerivedDates(startVal, endVal, durationType) {
-    if (!startVal) return null;
-    const params = new URLSearchParams({ start_date: startVal, end_date: endVal || startVal, duration_type: durationType });
-    try {
-      return await api(`/api/calculate-dates?${params.toString()}`);
-    } catch (err) {
-      toast(err.message, "error");
-      return null;
-    }
-  }
-  if (editing && editing.approved_dates && editing.approved_dates.length) {
-    approvedRows = editing.approved_dates.map((p) => ({ ...p }));
-    const derived = await fetchDerivedDates(editing.start_date, editing.end_date, editing.duration_type);
-    if (derived) derived.approved_dates.forEach((p) => { defaultApprovedByDate[p.assessment_date] = p.date; });
-  } else if (prefill.approved_dates && prefill.approved_dates.length) {
-    approvedRows = prefill.approved_dates.map((p) => ({ ...p }));
-    const derived = await fetchDerivedDates(current.start_date, current.end_date || current.start_date, current.duration_type === "continuous" ? "continuous" : "single");
-    if (derived) derived.approved_dates.forEach((p) => { defaultApprovedByDate[p.assessment_date] = p.date; });
-  } else if (current.start_date) {
-    const derived = await fetchDerivedDates(current.start_date, current.end_date || current.start_date, current.duration_type === "continuous" ? "continuous" : "single");
-    if (derived) {
-      derived.approved_dates.forEach((p) => { defaultApprovedByDate[p.assessment_date] = p.date; });
-      approvedRows = derived.assessment_dates.map((ad) => ({ assessment_date: ad, date: defaultApprovedByDate[ad] }));
-    }
-  }
-
-  function approvedDatesHtml() {
-    if (!approvedRows.length) return `<p class="muted">Pick the assessment date(s) above first.</p>`;
-    return approvedRows.map((row, index) => {
-      const isOverride = !!defaultApprovedByDate[row.assessment_date] && row.date !== defaultApprovedByDate[row.assessment_date];
-      return `
-        <div class="approved-date-row${isOverride ? " approved-date-row-override" : ""}">
-          <span class="approved-date-label">For ${escapeHtml(fmt(row.assessment_date))}</span>
-          <input type="date" class="approved-date-input" data-index="${index}" value="${row.date || ""}" />
-          ${isOverride
-            ? `<button type="button" class="ghost approved-date-reset" data-index="${index}">Reset</button>`
-            : `<span class="muted" style="font-size:12px;white-space:nowrap">Calculated</span>`}
-        </div>
-      `;
-    }).join("");
-  }
-
-  function bindApprovedDateEvents() {
-    document.querySelectorAll(".approved-date-input").forEach((input) => {
-      input.addEventListener("change", () => {
-        const idx = Number(input.dataset.index);
-        approvedRows[idx].date = input.value;
-        redrawApprovedDates();
-      });
-    });
-    document.querySelectorAll(".approved-date-reset").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const idx = Number(btn.dataset.index);
-        const ad = approvedRows[idx].assessment_date;
-        if (defaultApprovedByDate[ad]) approvedRows[idx].date = defaultApprovedByDate[ad];
-        redrawApprovedDates();
-      });
-    });
-  }
-
-  function redrawApprovedDates() {
-    $("approved-dates-rows").innerHTML = approvedDatesHtml();
-    bindApprovedDateEvents();
-  }
-
-  // Re-syncs approvedRows/defaultApprovedByDate whenever the date range or
-  // duration changes, preserving any day the person already hand-edited (as
-  // long as that same assessment date still exists in the new range).
-  async function onDateRangeChanged() {
-    const startVal = form.start_date.value;
-    const durationType = $("duration-type-checkbox").checked ? "continuous" : "single";
-    const endVal = durationType === "continuous" ? (form.end_date.value || startVal) : startVal;
-    const derived = await fetchDerivedDates(startVal, endVal, durationType);
-    if (!derived) {
-      approvedRows = [];
-      defaultApprovedByDate = {};
-      redrawApprovedDates();
-      return;
-    }
-    const newDefaults = {};
-    derived.approved_dates.forEach((p) => { newDefaults[p.assessment_date] = p.date; });
-    const preserved = {};
-    approvedRows.forEach((row) => {
-      const oldDefault = defaultApprovedByDate[row.assessment_date];
-      if (oldDefault && row.date !== oldDefault) preserved[row.assessment_date] = row.date;
-    });
-    defaultApprovedByDate = newDefaults;
-    approvedRows = derived.assessment_dates.map((ad) => ({ assessment_date: ad, date: preserved[ad] || newDefaults[ad] }));
-    redrawApprovedDates();
-  }
 
   const quals = current.assessment_center
     ? (state.centers.find((c) => c.name === current.assessment_center)?.qualifications || [])
@@ -513,39 +353,43 @@ async function renderScheduler(extra) {
   ]);
   const assessorsBySource = { province: provinceAssessors, region: regionAssessors };
 
+  // A saved assessor whose name isn't in the loaded registry (e.g. a previously entered
+  // custom name, or one typed before the Excel file was refreshed) should still show as
+  // free text instead of silently resetting to blank.
+  assessorRows = assessorRows.map((row) => {
+    if (!row.assessor || row.custom) return row;
+    const list = assessorsBySource[row.assessor_type]?.assessors || [];
+    const found = list.some((entry) => (typeof entry === "string" ? entry : entry.name) === row.assessor);
+    return found ? row : { ...row, custom: true };
+  });
+
   function assessorRowsHtml() {
     return assessorRows.map((row, index) => {
       const list = assessorsBySource[row.assessor_type].assessors;
-      const thisLabel = row.assessor_type === "province" ? "Province-Based" : "Region-Based";
-      const otherSource = row.assessor_type === "province" ? "region" : "province";
-      const otherLabel = otherSource === "region" ? "Region-Based" : "Province-Based";
-      const otherList = assessorsBySource[otherSource].assessors;
-      const isCustom = !!row.assessor && !list.some((a) => a.name === row.assessor);
-      const emptyHint = !list.length
-        ? (otherList.length
-            ? `<p class="hint" style="margin:4px 0 0">No ${thisLabel} assessors recorded for this qualification — ${otherList.length} available under ${otherLabel} instead. You can also just type a name below for someone not in the Excel file.</p>`
-            : `<p class="hint" style="margin:4px 0 0">No assessors recorded for this qualification under either Province-Based or Region-Based in the uploaded Excel files. Type a name below to add one anyway.</p>`)
-        : "";
+      const nameSlot = row.custom
+        ? `
+          <div class="assessor-custom-wrap">
+            <input type="text" class="assessor-custom-input" data-index="${index}" placeholder="Type assessor name" value="${escapeHtml(row.assessor)}" />
+            <button type="button" class="linkish assessor-use-list" data-index="${index}">Use list</button>
+          </div>
+        `
+        : `
+          <select class="assessor-name-input" data-index="${index}">
+            <option value="">Select assessor</option>
+            ${optionList(list, row.assessor)}
+            <option value="__custom__">+ Enter custom name…</option>
+          </select>
+        `;
       return `
         <div class="assessor-row">
+          <span class="assessor-num">${index + 1}</span>
           <select class="assessor-type-input" data-index="${index}">
             <option value="province" ${row.assessor_type === "province" ? "selected" : ""}>Province-Based</option>
             <option value="region" ${row.assessor_type === "region" ? "selected" : ""}>Region-Based</option>
           </select>
-          <input
-            type="text"
-            class="assessor-name-input"
-            data-index="${index}"
-            list="assessor-options-${index}"
-            placeholder="Type a name or pick a saved one"
-            value="${escapeHtml(row.assessor)}"
-          />
-          <datalist id="assessor-options-${index}">
-            ${optionList(list)}
-          </datalist>
+          <div class="assessor-name-slot">${nameSlot}</div>
           <button type="button" class="ghost assessor-remove" data-index="${index}" ${assessorRows.length <= 1 ? "disabled" : ""}>Remove</button>
         </div>
-        ${isCustom ? `<p class="hint" style="margin:4px 0 0">"${escapeHtml(row.assessor)}" isn't in the Excel registry — it'll be saved as a custom assessor.</p>` : emptyHint}
       `;
     }).join("");
   }
@@ -559,20 +403,32 @@ async function renderScheduler(extra) {
     document.querySelectorAll(".assessor-type-input").forEach((sel) => {
       sel.addEventListener("change", () => {
         const idx = Number(sel.dataset.index);
-        assessorRows[idx] = { assessor_type: sel.value, assessor: "" };
+        assessorRows[idx] = { assessor_type: sel.value, assessor: "", custom: false };
         redrawAssessorRows();
       });
     });
-    document.querySelectorAll(".assessor-name-input").forEach((input) => {
+    document.querySelectorAll(".assessor-name-input").forEach((sel) => {
+      sel.addEventListener("change", () => {
+        const idx = Number(sel.dataset.index);
+        if (sel.value === "__custom__") {
+          assessorRows[idx] = { ...assessorRows[idx], assessor: "", custom: true };
+          redrawAssessorRows();
+          document.querySelector(`.assessor-custom-input[data-index="${idx}"]`)?.focus();
+          return;
+        }
+        assessorRows[idx].assessor = sel.value;
+      });
+    });
+    document.querySelectorAll(".assessor-custom-input").forEach((input) => {
       input.addEventListener("input", () => {
         const idx = Number(input.dataset.index);
         assessorRows[idx].assessor = input.value;
       });
-      // Re-render on blur only, so the "custom assessor" hint and dedupe-safe state
-      // stay in sync without fighting the caret position while the person is typing.
-      input.addEventListener("change", () => {
-        const idx = Number(input.dataset.index);
-        assessorRows[idx].assessor = input.value;
+    });
+    document.querySelectorAll(".assessor-use-list").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const idx = Number(btn.dataset.index);
+        assessorRows[idx] = { ...assessorRows[idx], assessor: "", custom: false };
         redrawAssessorRows();
       });
     });
@@ -586,12 +442,107 @@ async function renderScheduler(extra) {
     });
   }
 
+  // Approved (portal schedule) dates: auto-calculated from the assessment date(s), but each
+  // one can optionally be edited by hand — e.g. the portal actually opened a different date.
+  function currentFormDates() {
+    const startInput = document.querySelector('input[name="start_date"]');
+    const endInput = document.querySelector('input[name="end_date"]');
+    const durationInput = document.querySelector('input[name="duration_type"]:checked');
+    return {
+      start: startInput ? startInput.value : current.start_date,
+      end: endInput ? endInput.value : current.end_date,
+      durationType: durationInput ? durationInput.value : current.duration_type,
+    };
+  }
+
+  let approvedRows;
+  if (prefill.approved_dates && prefill.approved_dates.length) {
+    approvedRows = prefill.approved_dates.map((row) => ({ ...row, manual: Boolean(row.manual) }));
+  } else if (editing && editing.approved_dates && editing.approved_dates.length) {
+    approvedRows = editing.approved_dates.map((row) => ({
+      assessment_date: row.assessment_date,
+      date: row.date,
+      manual: Boolean(row.manual),
+    }));
+  } else {
+    approvedRows = calculatedApprovedDates(current.start_date, current.end_date, current.duration_type).map((row) => ({ ...row, manual: false }));
+  }
+
+  function recomputeApprovedRows() {
+    const { start, end, durationType } = currentFormDates();
+    const autoRows = calculatedApprovedDates(start, end, durationType);
+    approvedRows = autoRows.map((auto) => {
+      const prev = approvedRows.find((row) => row.assessment_date === auto.assessment_date);
+      if (prev && prev.manual) return { ...auto, date: prev.date, manual: true };
+      return { ...auto, manual: false };
+    });
+  }
+
+  function approvedRowsHtml() {
+    if (!approvedRows.length) {
+      return `<p class="hint">Pick an assessment date above to see the auto-calculated portal schedule date.</p>`;
+    }
+    return `<div class="approved-date-list">${approvedRows.map((row, index) => `
+      <div class="approved-date-row">
+        <span class="approved-date-label">${escapeHtml(fmt(row.assessment_date))}</span>
+        <input type="date" class="approved-date-input" data-index="${index}" value="${row.date}" />
+        ${row.manual
+          ? `<span class="chip gold">Edited</span><button type="button" class="linkish approved-date-reset" data-index="${index}">Reset to auto</button>`
+          : `<span class="muted">Auto-calculated</span>`}
+      </div>
+    `).join("")}</div>`;
+  }
+
+  function redrawApprovedRows() {
+    $("approved-date-rows").innerHTML = approvedRowsHtml();
+    bindApprovedRowEvents();
+  }
+
+  function bindApprovedRowEvents() {
+    document.querySelectorAll(".approved-date-input").forEach((input) => {
+      input.addEventListener("change", () => {
+        const idx = Number(input.dataset.index);
+        const { start, end, durationType } = currentFormDates();
+        const auto = calculatedApprovedDates(start, end, durationType)[idx];
+        approvedRows[idx] = { ...approvedRows[idx], date: input.value, manual: !auto || input.value !== auto.date };
+        redrawApprovedRows();
+      });
+    });
+    document.querySelectorAll(".approved-date-reset").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const idx = Number(btn.dataset.index);
+        const { start, end, durationType } = currentFormDates();
+        const auto = calculatedApprovedDates(start, end, durationType)[idx];
+        if (auto) approvedRows[idx] = { ...auto, manual: false };
+        redrawApprovedRows();
+      });
+    });
+  }
+
+  state.schedulerSearch = state.schedulerSearch || "";
+  state.schedulerTab = state.schedulerTab || "entry";
+  state.schedulerPage = state.schedulerPage || 1;
+  const tab = state.schedulerTab;
+  const filteredRecords = filterAssessments(state.assessments, state.schedulerSearch);
+  const recordsPaged = paginate(filteredRecords, state.schedulerPage);
+  state.schedulerPage = recordsPaged.page;
+
   $("view-scheduler").innerHTML = `
     <div class="scheduler-layout">
+      <div class="pill-tabs" role="tablist">
+        <button type="button" class="tab-btn ${tab === "entry" ? "active" : ""}" data-tab="entry">${editing ? "Edit Entry" : "Assessment Entry"}</button>
+        <button type="button" class="tab-btn ${tab === "records" ? "active" : ""}" data-tab="records">Records <span class="tab-count">${state.assessments.length}</span></button>
+      </div>
+      <div class="scheduler-panel" data-panel="entry" ${tab === "entry" ? "" : "hidden"}>
       <div class="card scheduler-form">
-        <h3>${editing ? "Edit assessment" : "Assessment entry"}</h3>
-        <p class="hint">Approved, schedule, and results dates are calculated automatically.</p>
-        <form id="assessment-form" class="form-grid">
+        <div class="scheduler-form-head">
+          <p class="eyebrow-tag">${editing ? "Editing record" : "New record"}</p>
+          <h3>${editing ? "Edit assessment" : "Assessment entry"}</h3>
+          <p>Approved, schedule, and results dates are calculated automatically.</p>
+        </div>
+        <div class="scheduler-form-body">
+        <form id="assessment-form" class="sched-grid">
+          <p class="sched-section-label field full">Where &amp; what</p>
           <div class="field full">
             <label>Assessment Center</label>
             <select name="assessment_center" required>
@@ -606,13 +557,16 @@ async function renderScheduler(extra) {
               ${optionList(quals, current.qualification)}
             </select>
           </div>
-          <div class="field">
+
+          <p class="sched-section-label field full">Schedule</p>
+          <div class="field full">
             <label>Assessment Duration</label>
-            <label class="checkbox-field">
-              <input type="checkbox" name="duration_type" id="duration-type-checkbox" value="continuous" ${current.duration_type === "continuous" ? "checked" : ""} />
-              <span>Continuous / Multiple Days</span>
-            </label>
-            <span class="muted" style="font-size:12px">Unchecked = single day</span>
+            <div class="duration-toggle">
+              <input type="radio" id="duration-single" name="duration_type" value="single" ${current.duration_type === "single" ? "checked" : ""} />
+              <label for="duration-single">Single Day</label>
+              <input type="radio" id="duration-continuous" name="duration_type" value="continuous" ${current.duration_type === "continuous" ? "checked" : ""} />
+              <label for="duration-continuous">Continuous / Multiple Days</label>
+            </div>
           </div>
           <div class="field">
             <label>Number of Pax</label>
@@ -627,10 +581,12 @@ async function renderScheduler(extra) {
             <input type="date" name="end_date" value="${current.end_date || ""}" />
           </div>
           <div class="field full">
-            <label>Approved / Schedule Dates</label>
-            <p class="hint">Calculated automatically from the assessment date(s) above. Edit a date only for a special exemption — rows left as-is stay on the automatic rule.</p>
-            <div id="approved-dates-rows">${approvedDatesHtml()}</div>
+            <label>Approved / Portal Schedule Date${approvedRows.length === 1 ? "" : "(s)"}</label>
+            <div id="approved-date-rows">${approvedRowsHtml()}</div>
+            <p class="hint">Auto-calculated from the assessment date, but you can edit any date by hand if the portal schedule ended up different.</p>
           </div>
+
+          <p class="sched-section-label field full">People</p>
           <div class="field full">
             <label>Assessors</label>
             <div id="assessor-rows">${assessorRowsHtml()}</div>
@@ -645,34 +601,38 @@ async function renderScheduler(extra) {
           </div>
           <div class="field full">
             <label>Remarks</label>
-            <textarea name="remarks" placeholder="Optional — leave blank if none">${escapeHtml(current.remarks || "")}</textarea>
+            <textarea name="remarks" placeholder="Optional notes about this assessment">${escapeHtml(current.remarks || "")}</textarea>
           </div>
+
           <div class="field full row-actions">
             <button class="primary" type="submit">${editing ? "Update record" : "Save assessment"}</button>
             ${editing ? `<button class="ghost" type="button" id="cancel-edit">Cancel</button>` : ""}
           </div>
         </form>
-      </div>
-      <div class="card scheduler-records">
-        <h3>Assessment records</h3>
-        <div class="records-toolbar">
-          <label for="records-sort" class="muted" style="text-transform:none;letter-spacing:normal">Sort by</label>
-          <select id="records-sort">
-            <option value="added_desc" ${state.recordsSort === "added_desc" ? "selected" : ""}>Date added (newest first)</option>
-            <option value="added_asc" ${state.recordsSort === "added_asc" ? "selected" : ""}>Date added (oldest first)</option>
-            <option value="assessment_desc" ${state.recordsSort === "assessment_desc" ? "selected" : ""}>Assessment date (latest first)</option>
-            <option value="assessment_asc" ${state.recordsSort === "assessment_asc" ? "selected" : ""}>Assessment date (earliest first)</option>
-          </select>
         </div>
-        <div id="records-list">${assessmentCards(sortAssessments(state.assessments, state.recordsSort))}</div>
+      </div>
+      </div>
+      <div class="scheduler-panel" data-panel="records" ${tab === "records" ? "" : "hidden"}>
+      <div class="card scheduler-records">
+        <div class="records-head">
+          <h3>Assessment records <span class="records-count">· ${state.assessments.length} total</span></h3>
+          <div class="records-search">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input type="search" id="scheduler-search" placeholder="Search center, qualification, assessor, rep" value="${escapeHtml(state.schedulerSearch)}" />
+          </div>
+        </div>
+        <div id="scheduler-record-list">${assessmentCards(recordsPaged.pageItems, state.schedulerSearch ? "No assessments match your search." : "No assessments yet.")}</div>
+        <div id="scheduler-record-pagination">${paginationControls("scheduler", recordsPaged.page, recordsPaged.totalPages, filteredRecords.length)}</div>
+      </div>
       </div>
     </div>
   `;
 
-  $("records-sort").addEventListener("change", (event) => {
-    state.recordsSort = event.target.value;
-    $("records-list").innerHTML = assessmentCards(sortAssessments(state.assessments, state.recordsSort));
-    bindRecordButtons();
+  document.querySelectorAll(".pill-tabs .tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.schedulerTab = btn.dataset.tab;
+      renderScheduler({ prefill: state.prefill, assessment: editing });
+    });
   });
 
   bindAssessorRowEvents();
@@ -680,19 +640,49 @@ async function renderScheduler(extra) {
     assessorRows.push({ assessor_type: "province", assessor: "" });
     redrawAssessorRows();
   });
-  bindApprovedDateEvents();
+  bindApprovedRowEvents();
+
+  function refreshSchedulerRecords() {
+    const filtered = filterAssessments(state.assessments, state.schedulerSearch);
+    const paged = paginate(filtered, state.schedulerPage);
+    state.schedulerPage = paged.page;
+    $("scheduler-record-list").innerHTML = assessmentCards(paged.pageItems, state.schedulerSearch ? "No assessments match your search." : "No assessments yet.");
+    $("scheduler-record-pagination").innerHTML = paginationControls("scheduler", paged.page, paged.totalPages, filtered.length);
+    bindRecordButtons();
+    bindPaginationControls(
+      "scheduler-record-pagination",
+      () => { state.schedulerPage -= 1; refreshSchedulerRecords(); },
+      () => { state.schedulerPage += 1; refreshSchedulerRecords(); }
+    );
+  }
+
+  $("scheduler-search").addEventListener("input", (event) => {
+    state.schedulerSearch = event.target.value;
+    state.schedulerPage = 1;
+    refreshSchedulerRecords();
+  });
+  refreshSchedulerRecords();
 
   const form = $("assessment-form");
-  const duration = $("duration-type-checkbox");
   const endWrap = $("end-wrap");
-  duration.addEventListener("change", () => {
-    const continuous = duration.checked;
-    endWrap.style.display = continuous ? "" : "none";
-    $("start-label").textContent = continuous ? "Start Date" : "Assessment Date";
-    onDateRangeChanged();
+  form.querySelectorAll('input[name="duration_type"]').forEach((input) => {
+    input.addEventListener("change", () => {
+      const continuous = input.value === "continuous" && input.checked;
+      if (!input.checked) return;
+      endWrap.style.display = continuous ? "" : "none";
+      $("start-label").textContent = continuous ? "Start Date" : "Assessment Date";
+      recomputeApprovedRows();
+      redrawApprovedRows();
+    });
   });
-  form.start_date.addEventListener("change", onDateRangeChanged);
-  form.end_date.addEventListener("change", onDateRangeChanged);
+  form.start_date.addEventListener("change", () => {
+    recomputeApprovedRows();
+    redrawApprovedRows();
+  });
+  form.end_date.addEventListener("change", () => {
+    recomputeApprovedRows();
+    redrawApprovedRows();
+  });
   form.assessment_center.addEventListener("change", async () => {
     state.prefill = { ...formValues(form), assessors: assessorRows.slice(), approved_dates: approvedRows.slice() };
     state.prefill.qualification = "";
@@ -710,8 +700,11 @@ async function renderScheduler(extra) {
     payload.assessors = assessorRows
       .filter((row) => row.assessor)
       .map((row) => ({ name: row.assessor, assessor_type: row.assessor_type }));
+    if (!payload.assessors.length) {
+      toast("Add at least one assessor.", "error");
+      return;
+    }
     payload.approved_dates = approvedRows.map((row) => ({ assessment_date: row.assessment_date, date: row.date }));
-    // Assessors are optional — the date can be locked in before anyone is assigned.
     try {
       if (editing) {
         await api(`/api/assessments/${editing.id}`, { method: "PUT", headers: jsonHeaders(), body: JSON.stringify(payload) });
@@ -722,6 +715,7 @@ async function renderScheduler(extra) {
       }
       state.editingId = null;
       state.prefill = null;
+      state.schedulerTab = "records";
       await renderScheduler();
     } catch (err) {
       toast(err.message, "error");
@@ -730,17 +724,14 @@ async function renderScheduler(extra) {
   $("cancel-edit")?.addEventListener("click", () => {
     state.editingId = null;
     state.prefill = null;
+    state.schedulerTab = "records";
     renderScheduler();
   });
   bindRecordButtons();
 }
 
 function formValues(form) {
-  const values = Object.fromEntries(new FormData(form).entries());
-  // duration_type is now a checkbox ("Continuous / Multiple Days"); FormData
-  // only includes it when checked, so an absent entry means single-day.
-  values.duration_type = values.duration_type === "continuous" ? "continuous" : "single";
-  return values;
+  return Object.fromEntries(new FormData(form).entries());
 }
 
 function jsonHeaders() {
@@ -748,73 +739,79 @@ function jsonHeaders() {
 }
 
 function itemAssessors(item) {
-  if (item.assessors && item.assessors.length) return item.assessors;
-  // Only fall back to the legacy singular fields for old records that never had
-  // an "assessors" array at all. If "assessors" is present but empty, that's a
-  // deliberate "not yet assigned" state and should stay empty, not be misread
-  // as a single assessor with a blank name.
-  if (!item.assessors && item.assessor) return [{ name: item.assessor, assessor_type: item.assessor_type }];
-  return [];
+  return item.assessors && item.assessors.length
+    ? item.assessors
+    : [{ name: item.assessor, assessor_type: item.assessor_type }];
 }
 
 function assessorChipLabel(item) {
   const list = itemAssessors(item);
-  if (!list.length) return "Not yet assigned";
   if (list.length > 1) return `${list.length} Assessors`;
   return list[0].assessor_type === "region" ? "Region-Based" : "Province-Based";
 }
 
 function assessorsSummary(item) {
-  const list = itemAssessors(item);
-  if (!list.length) return "Not yet assigned";
-  return list
+  return itemAssessors(item)
     .map((a) => `${a.name} (${a.assessor_type === "region" ? "Region-Based" : "Province-Based"})`)
     .join("; ");
 }
 
-function sortAssessments(items, sortKey) {
-  const sorted = items.slice();
-  const byAdded = (item) => item.created_at || "";
-  const byAssessmentDate = (item) => item.start_date || "";
-  switch (sortKey) {
-    case "added_asc":
-      sorted.sort((a, b) => byAdded(a).localeCompare(byAdded(b)));
-      break;
-    case "assessment_desc":
-      sorted.sort((a, b) => byAssessmentDate(b).localeCompare(byAssessmentDate(a)));
-      break;
-    case "assessment_asc":
-      sorted.sort((a, b) => byAssessmentDate(a).localeCompare(byAssessmentDate(b)));
-      break;
-    case "added_desc":
-    default:
-      sorted.sort((a, b) => byAdded(b).localeCompare(byAdded(a)));
-      break;
-  }
-  return sorted;
+function filterAssessments(items, query) {
+  const q = (query || "").trim().toLowerCase();
+  if (!q) return items;
+  return items.filter((item) => {
+    const haystack = [
+      item.assessment_center,
+      item.qualification,
+      item.tesda_representative,
+      item.remarks,
+      assessorsSummary(item),
+    ].join(" ").toLowerCase();
+    return haystack.includes(q);
+  });
 }
 
-function assessmentCards(items) {
-  if (!items.length) return `<p class="empty">No assessments yet.</p>`;
-  return `<div class="record-list">${items.map((item) => `
-    <article class="record-card">
-      <h4>${escapeHtml(item.assessment_center)}</h4>
-      <div class="muted">${escapeHtml(item.qualification)}</div>
-      <div class="record-meta">
+function assessmentCards(items, emptyMessage) {
+  if (!items.length) return `<p class="empty">${escapeHtml(emptyMessage || "No assessments yet.")}</p>`;
+  return `<div class="assessment-list">${items.map((item) => `
+    <article class="assessment-card ${item.duration_type === "single" ? "is-single" : ""}">
+      <div class="assessment-card-top">
+        <div class="assessment-card-id">
+          <h4>${escapeHtml(item.assessment_center)}</h4>
+          <p>${escapeHtml(item.qualification)}</p>
+        </div>
+        <div class="assessment-card-date">${escapeHtml(item.date_label)}</div>
+      </div>
+      <div class="assessment-card-badges">
         <span class="chip">${escapeHtml(durationLabel(item.duration_type))}</span>
         <span class="chip gold">${escapeHtml(assessorChipLabel(item))}</span>
-        ${item.approved_dates_manual ? `<span class="chip rose">Manually overridden dates</span>` : ""}
-        <span>${escapeHtml(item.date_label)}</span>
-        <span class="muted">${item.pax} pax</span>
+        <span class="chip">${item.pax} pax</span>
       </div>
-      <div><b>Assessors:</b> ${escapeHtml(assessorsSummary(item))}</div>
-      <div><b>TESDA Representative:</b> ${escapeHtml(item.tesda_representative || "None")}</div>
-      ${item.remarks ? `<div><b>Remarks:</b> ${escapeHtml(item.remarks)}</div>` : ""}
-      <div class="muted">Approved: ${escapeHtml(item.approved_date_list.map(fmt).join("; ") || "—")}</div>
-      <div class="muted">Results: ${escapeHtml(item.results_reminder_list.map(fmt).join("; ") || "—")}</div>
-      <div class="row-actions">
-        <button class="ghost" data-edit="${item.id}">Edit</button>
-        <button class="danger" data-delete="${item.id}">Delete</button>
+      <div class="assessment-card-divider"></div>
+      <dl class="assessment-card-grid">
+        <div class="span-2">
+          <dt>Assessors</dt>
+          <dd>${escapeHtml(assessorsSummary(item))}</dd>
+        </div>
+        <div>
+          <dt>TESDA Representative</dt>
+          <dd>${escapeHtml(item.tesda_representative || "None")}</dd>
+        </div>
+        ${item.remarks ? `
+        <div class="span-2">
+          <dt>Remarks</dt>
+          <dd>${escapeHtml(item.remarks)}</dd>
+        </div>` : ""}
+      </dl>
+      <div class="assessment-card-foot">
+        <div class="assessment-card-dates">
+          <span>Approved: <b>${escapeHtml(item.approved_date_list.map(fmt).join("; ") || "—")}</b>${(item.approved_dates || []).some((p) => p.manual) ? ` <span class="chip gold">Edited</span>` : ""}</span>
+          <span>Results: <b>${escapeHtml(item.results_reminder_list.map(fmt).join("; ") || "—")}</b></span>
+        </div>
+        <div class="row-actions">
+          <button class="ghost" data-edit="${item.id}">Edit</button>
+          <button class="danger" data-delete="${item.id}">Delete</button>
+        </div>
       </div>
     </article>
   `).join("")}</div>`;
@@ -824,7 +821,7 @@ function assessmentTable(items) {
   if (!items.length) return `<p class="empty">No assessments yet.</p>`;
   return `<table>
     <thead><tr>
-      <th>Center / Qualification</th><th>Dates</th><th>People</th><th>Calculated dates</th><th></th>
+      <th>Center / Qualification</th><th>Dates</th><th>People</th><th>Calculated dates</th><th>Remarks</th><th></th>
     </tr></thead>
     <tbody>
       ${items.map((item) => `
@@ -836,6 +833,7 @@ function assessmentTable(items) {
             <div>Approved: ${escapeHtml(item.approved_date_list.map(fmt).join("; "))}</div>
             <div>Results: ${escapeHtml(item.results_reminder_list.map(fmt).join("; "))}</div>
           </td>
+          <td class="muted">${escapeHtml(item.remarks || "—")}</td>
           <td class="row-actions">
             <button class="ghost" data-edit="${item.id}">Edit</button>
             <button class="danger" data-delete="${item.id}">Delete</button>
@@ -850,6 +848,7 @@ function bindRecordButtons() {
   document.querySelectorAll("[data-edit]").forEach((btn) => {
     btn.addEventListener("click", () => {
       state.editingId = btn.dataset.edit;
+      state.schedulerTab = "entry";
       switchView("scheduler");
     });
   });
@@ -865,7 +864,6 @@ function bindRecordButtons() {
 }
 
 async function renderCalendar() {
-  if (!state.representatives.length) await refreshLookups();
   const { type, year, month } = state.calendar;
   const payload = await api(`/api/calendar?type=${type}&year=${year}&month=${month}`);
   state.calendar.payload = payload;
@@ -939,202 +937,195 @@ function showDay(iso) {
     return;
   }
   const uniqueAssessments = [];
-  const models = [];
-  events.forEach((event) => {
-    if (event.kind === "assessment") {
-      if (uniqueAssessments.includes(event.assessment.id)) return;
-      uniqueAssessments.push(event.assessment.id);
-      models.push(taskCardModel(event, "assessment"));
-    } else {
-      models.push(taskCardModel(event, event.kind === "approved" ? "schedule" : "results"));
-    }
-  });
-  trackCardModels(models);
-  const pendingCount = models.filter((m) => !m.done).length;
-
+  const pendingCount = events.filter((e) => !e.done).length;
+  const blocks = events.map((event) => {
+    if (event.kind === "assessment" && uniqueAssessments.includes(event.assessment.id)) return "";
+    if (event.kind === "assessment") uniqueAssessments.push(event.assessment.id);
+    const icon = event.kind === "approved" ? "Approved Date" : event.kind === "results" ? "Results Reminder" : "Assessment";
+    const a = event.assessment;
+    return `<div class="event-block ${event.done ? "event-done" : ""}">
+      <label class="task-check">
+        <input type="checkbox" data-task-id="${escapeHtml(event.task_id)}" ${event.done ? "checked" : ""} />
+        <span class="chip ${event.kind === "results" ? "rose" : event.kind === "assessment" ? "gold" : ""}">${icon}</span>
+        ${event.done ? `<span class="chip" style="background:rgba(74,222,128,0.15);color:var(--ok)">Done</span>` : ""}
+      </label>
+      <h3 style="margin-top:8px">${escapeHtml(event.title)}</h3>
+      <p>${escapeHtml(event.detail)}</p>
+      <p class="muted">${escapeHtml(a.assessment_center)} · ${escapeHtml(a.qualification)} · ${escapeHtml(a.date_label)}</p>
+      <button class="ghost" data-open="${a.id}">View / edit assessment</button>
+    </div>`;
+  }).join("");
   openModal(`
     <div class="modal-head">
-      <div><p class="eyebrow">${iso} — ${pendingCount === 0 ? "All done" : `${pendingCount} pending`}</p><h2>${fmt(iso)} — ${models.length} ${models.length === 1 ? "Task" : "Tasks"}</h2></div>
+      <div><p class="eyebrow">${iso} — ${pendingCount === 0 ? "All done" : `${pendingCount} pending`}</p><h2>${fmt(iso)} — ${events.length} ${events.length === 1 ? "Task" : "Tasks"}</h2></div>
       <button class="ghost" id="close-modal">Close</button>
     </div>
-    ${renderTaskCardGroup(models)}
+    ${blocks}
   `);
   $("close-modal").onclick = closeModal;
-  bindTaskCards($("modal-card"), async () => {
-    await refreshCalendarCounts(iso);
-    showDay(iso);
+  document.querySelectorAll("[data-task-id]").forEach((box) => {
+    box.addEventListener("change", () => toggleTask(box.dataset.taskId, box.checked, iso));
+  });
+  document.querySelectorAll("[data-open]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      closeModal();
+      state.editingId = btn.dataset.open;
+      state.schedulerTab = "entry";
+      switchView("scheduler");
+    });
   });
 }
 
-// After a task card mutation inside the day modal, refresh just this day's bucket
-// from the server (so done/assessor/rep state is current) and patch the month
-// grid's pending count for that day, without a full calendar re-render.
-async function refreshCalendarCounts(iso) {
-  const { type, year, month } = state.calendar;
-  const payload = await api(`/api/calendar?type=${type}&year=${year}&month=${month}`);
-  state.calendar.payload = payload;
-  const info = payload.compact[iso];
+async function toggleTask(taskId, done, iso) {
+  try {
+    await api("/api/tasks/toggle", { method: "POST", headers: jsonHeaders(), body: JSON.stringify({ task_id: taskId, done }) });
+  } catch (err) {
+    toast(err.message, "error");
+    return;
+  }
+  const events = state.calendar.payload?.events?.[iso] || [];
+  events.forEach((ev) => { if (ev.task_id === taskId) ev.done = done; });
+  const compact = state.calendar.payload?.compact?.[iso];
+  const pending = events.filter((ev) => !ev.done).length;
+  if (compact) compact.pending = pending;
   const dayBtn = document.querySelector(`.day[data-day="${iso}"]`);
   const alertEl = dayBtn?.querySelector(".day-alert");
-  if (alertEl && info) {
-    const allDone = info.pending === 0;
-    alertEl.textContent = allDone ? `${info.count} done ✓` : `${info.pending} pending`;
-    alertEl.classList.toggle("day-alert-done", allDone);
+  if (alertEl) {
+    alertEl.textContent = pending === 0 ? `${events.length} done ✓` : `${pending} pending`;
+    alertEl.classList.toggle("day-alert-done", pending === 0);
   }
+  toast(done ? "Marked as done." : "Marked as not done.");
+  showDay(iso);
 }
 
 async function renderFinder() {
   const query = state.finder.query;
-  const source = state.finder.source || "";
-  const tab = state.finder.tab === "centers" ? "centers" : "assessors";
+  // Always fetch the full (unfiltered) assessor list and split it client-side for the two
+  // source tabs. This means switching tabs never re-fetches and never loses the in-progress
+  // pick — the bug where choosing "Region-Based" reset whatever the user had already selected.
+  const data = await api(`/api/finder?q=${encodeURIComponent(query)}&qualification=${encodeURIComponent(state.finder.selected)}`);
+  const source = state.finder.source === "region" ? "region" : "province";
+
+  // Reset the in-progress pick only when the qualification actually changes, not on every
+  // re-render (tab switches, search debounce, etc. all call renderFinder()).
+  if (!state.finder.picked || state.finder.picked.qualification !== data.qualification) {
+    state.finder.picked = { qualification: data.qualification, assessment_center: "", assessor: "", assessor_type: "province" };
+  }
   const picked = state.finder.picked;
-  const data = await api(`/api/finder?q=${encodeURIComponent(query)}&qualification=${encodeURIComponent(state.finder.selected)}&source=${encodeURIComponent(source)}`);
-  const sourceLabel = source === "region" ? "Region-Based" : source === "province" ? "Province-Based" : "All";
 
-  const qualificationListHtml = data.suggestions.length
-    ? data.suggestions.map((q) => `
-        <button class="finder-qual-item ${q === data.qualification ? "active" : ""}" data-qual="${escapeHtml(q)}">${escapeHtml(q)}</button>
-      `).join("")
-    : `<p class="empty">No qualifications match that search.</p>`;
-
-  const assessorsPanel = `
-    <div class="segmented">
-      <button type="button" class="${source === "" ? "active" : ""}" data-source-filter="">All</button>
-      <button type="button" class="${source === "province" ? "active" : ""}" data-source-filter="province">Province-Based</button>
-      <button type="button" class="${source === "region" ? "active" : ""}" data-source-filter="region">Region-Based</button>
-    </div>
-    <div class="finder-result-list">
-      ${data.assessors.length ? data.assessors.map((a) => {
-        const isPicked = !!picked.assessor && picked.assessor === a.name;
-        const detail = [
-          a.assessor_type === "region" ? "Region-Based" : "Province-Based",
-          a.address || "",
-          a.designation || a.company || "",
-        ].filter(Boolean).join(" · ");
-        return `
-          <div class="finder-result-card ${isPicked ? "finder-result-picked" : ""}">
-            <div>
-              <b>${escapeHtml(a.display_name || a.name)}</b>
-              <span class="muted">${escapeHtml(detail)}</span>
-            </div>
-            <button type="button" class="${isPicked ? "primary" : "ghost"}" data-pick-assessor="${escapeHtml(a.name)}" data-pick-assessor-type="${escapeHtml(a.assessor_type || "province")}">${isPicked ? "Selected ✓" : "Use"}</button>
-          </div>
-        `;
-      }).join("") : `<p class="empty">No ${sourceLabel.toLowerCase()} assessors found for this qualification.</p>`}
-    </div>
-  `;
-
-  const centersPanel = `
-    <div class="finder-result-list">
-      ${data.centers.length ? data.centers.map((c) => {
-        const isPicked = !!picked.assessment_center && picked.assessment_center === c.name;
-        const detail = [c.address || "", c.manager || ""].filter(Boolean).join(" · ");
-        return `
-          <div class="finder-result-card ${isPicked ? "finder-result-picked" : ""}">
-            <div>
-              <b>${escapeHtml(c.name)}</b>
-              <span class="muted">${escapeHtml(detail)}</span>
-            </div>
-            <button type="button" class="${isPicked ? "primary" : "ghost"}" data-pick-center="${escapeHtml(c.name)}">${isPicked ? "Selected ✓" : "Use"}</button>
-          </div>
-        `;
-      }).join("") : `<p class="empty">No assessment centers found for this qualification.</p>`}
-    </div>
-  `;
+  const provinceAssessors = data.assessors.filter((a) => (a.assessor_type || "province") === "province");
+  const regionAssessors = data.assessors.filter((a) => a.assessor_type === "region");
+  const activeAssessors = source === "region" ? regionAssessors : provinceAssessors;
 
   $("view-finder").innerHTML = `
-    <div class="finder-layout">
-      <div class="card finder-sidebar">
-        <div class="toolbar">
-          <input id="finder-q" placeholder="Search qualification, e.g. Computer" value="${escapeHtml(query)}" />
-          ${query || state.finder.selected ? `<button type="button" class="ghost" id="finder-clear">Clear</button>` : ""}
-        </div>
-        <div class="finder-qual-list">${qualificationListHtml}</div>
+    <div class="card">
+      <div class="scheduler-form-head" style="margin:-18px -18px 16px;">
+        <p class="eyebrow-tag">Qualification Finder</p>
+        <h3>${data.qualification ? escapeHtml(data.qualification) : "Find a qualification"}</h3>
+        <p>Look up who's eligible to assess a qualification and where, then jump straight into scheduling.</p>
       </div>
-      <div class="card finder-main">
-        ${!data.qualification ? `
-          <p class="empty">Search or pick a qualification on the left to see its assessors and assessment centers.</p>
-        ` : `
-          <div class="finder-main-head">
-            <div>
-              <h3 style="margin-bottom:2px">${escapeHtml(data.qualification)}</h3>
-              <span class="muted">${data.assessor_count} assessor${data.assessor_count === 1 ? "" : "s"} · ${data.center_count} center${data.center_count === 1 ? "" : "s"}</span>
+      <div class="toolbar">
+        <input id="finder-q" placeholder="Search qualification, e.g. Computer" value="${escapeHtml(query)}" />
+        <button class="ghost" id="finder-clear">Clear</button>
+      </div>
+      <div class="grid two" style="margin-top:16px">
+        <div>
+          <h3>Qualifications</h3>
+          <div class="finder-list">
+            ${data.suggestions.length ? data.suggestions.map((q) => `
+              <button class="pick ${q === data.qualification ? "selected" : ""}" data-qual="${escapeHtml(q)}">${escapeHtml(q)}</button>
+            `).join("") : `<p class="empty">No qualifications match that search.</p>`}
+          </div>
+        </div>
+        <div>
+          ${data.qualification ? `
+            <p class="hint">Assessors found: ${data.assessor_count} · Assessment centers found: ${data.center_count}</p>
+
+            <div class="pill-tabs" id="finder-source-tabs">
+              <button type="button" class="tab-btn ${source === "province" ? "active" : ""}" data-source="province">
+                <span class="tab-dot"></span>Province-Based <span class="tab-count">${provinceAssessors.length}</span>
+              </button>
+              <button type="button" class="tab-btn ${source === "region" ? "active" : ""}" data-source="region" data-region>
+                <span class="tab-dot"></span>Region-Based <span class="tab-count">${regionAssessors.length}</span>
+              </button>
             </div>
-            <a class="ghost" style="text-decoration:none" href="/api/finder/export?qualification=${encodeURIComponent(data.qualification)}">Export Assessors to Excel</a>
-          </div>
-          <div class="selection-bar">
-            <div class="selection-bar-item">
-              <span class="muted" style="font-size:0.78rem">Center</span>
-              <b>${picked.assessment_center ? escapeHtml(picked.assessment_center) : "Not picked yet"}</b>
+
+            <div class="grid two" style="margin-top:14px">
+              <div>
+                <h3 style="margin:0 0 10px">Available assessors</h3>
+                ${activeAssessors.length ? activeAssessors.map((a) => `
+                  <div class="task ${picked.assessor === a.name && picked.assessor_type === (a.assessor_type || "province") ? "task-picked" : ""}">
+                    <b>${escapeHtml(a.display_name || a.name)}</b>
+                    <span>${escapeHtml(a.address || "No address")} · ${escapeHtml(a.designation || a.company || "")}</span>
+                    <div class="row-actions" style="margin-top:8px">
+                      <button class="ghost" data-pick-assessor="${escapeHtml(a.name)}" data-pick-assessor-type="${escapeHtml(a.assessor_type || "province")}">
+                        ${picked.assessor === a.name && picked.assessor_type === (a.assessor_type || "province") ? "Selected ✓" : "Use assessor"}
+                      </button>
+                    </div>
+                  </div>
+                `).join("") : `<p class="empty">No ${source === "region" ? "region-based" : "province-based"} assessors found for this qualification.</p>`}
+              </div>
+              <div>
+                <h3 style="margin:0 0 10px">Assessment centers</h3>
+                ${data.centers.length ? data.centers.map((c) => `
+                  <div class="task ${picked.assessment_center === c.name ? "task-picked" : ""}">
+                    <b>${escapeHtml(c.name)}</b>
+                    <span>${escapeHtml(c.address || "")}${c.manager ? " · " + escapeHtml(c.manager) : ""}</span>
+                    <div class="row-actions" style="margin-top:8px">
+                      <button class="ghost" data-pick-center="${escapeHtml(c.name)}">${picked.assessment_center === c.name ? "Selected ✓" : "Use center"}</button>
+                    </div>
+                  </div>
+                `).join("") : `<p class="empty">No assessment centers found for this qualification.</p>`}
+              </div>
             </div>
-            <div class="selection-bar-item">
-              <span class="muted" style="font-size:0.78rem">Assessor</span>
-              <b>${picked.assessor ? escapeHtml(picked.assessor) : "Not picked yet"}</b>
+            <div class="row-actions" style="margin-top:16px; align-items:center">
+              <button class="primary" id="create-from-finder">Create assessment</button>
+              ${picked.assessment_center || picked.assessor ? `<span class="muted">${escapeHtml([picked.assessment_center, picked.assessor].filter(Boolean).join(" · "))}</span>` : ""}
             </div>
-            <button type="button" class="primary" id="create-from-finder">Create assessment</button>
-          </div>
-          <div class="segmented" style="margin-top:16px">
-            <button type="button" class="${tab === "assessors" ? "active" : ""}" id="finder-tab-assessors">Assessors</button>
-            <button type="button" class="${tab === "centers" ? "active" : ""}" id="finder-tab-centers">Assessment Centers</button>
-          </div>
-          <div style="margin-top:14px">
-            ${tab === "assessors" ? assessorsPanel : centersPanel}
-          </div>
-        `}
+          ` : `<p class="empty">Select a qualification to see assessors and centers.</p>`}
+        </div>
       </div>
     </div>
   `;
-
   const box = $("finder-q");
   box.addEventListener("input", debounce(() => {
     state.finder.query = box.value;
     state.finder.selected = "";
     renderFinder();
   }, 250));
-  $("finder-clear")?.addEventListener("click", () => {
-    state.finder = { query: "", selected: "", source: state.finder.source, tab: state.finder.tab, picked: { assessment_center: "", assessor: "", assessor_type: "province" } };
+  $("finder-clear").onclick = () => {
+    state.finder = { query: "", selected: "", source: state.finder.source, picked: null };
     renderFinder();
-  });
+  };
   document.querySelectorAll("[data-qual]").forEach((btn) => {
+    btn.onclick = () => { state.finder.selected = btn.dataset.qual; renderFinder(); };
+  });
+  document.querySelectorAll("#finder-source-tabs .tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
-      state.finder.selected = btn.dataset.qual;
-      // A pick is tied to the qualification it was made under, so switching
-      // qualification starts the selection fresh rather than carrying over
-      // a center/assessor that may not even serve the new qualification.
-      state.finder.picked = { assessment_center: "", assessor: "", assessor_type: "province" };
+      state.finder.source = btn.dataset.source;
       renderFinder();
     });
   });
-  document.querySelectorAll("[data-source-filter]").forEach((btn) => {
-    btn.addEventListener("click", () => { state.finder.source = btn.dataset.sourceFilter; renderFinder(); });
-  });
-  $("finder-tab-assessors")?.addEventListener("click", () => { state.finder.tab = "assessors"; renderFinder(); });
-  $("finder-tab-centers")?.addEventListener("click", () => { state.finder.tab = "centers"; renderFinder(); });
   document.querySelectorAll("[data-pick-center]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const name = btn.dataset.pickCenter;
-      state.finder.picked.assessment_center = state.finder.picked.assessment_center === name ? "" : name;
+    btn.onclick = () => {
+      state.finder.picked.assessment_center = btn.dataset.pickCenter;
+      toast(`Center set: ${state.finder.picked.assessment_center}`);
       renderFinder();
-    });
+    };
   });
   document.querySelectorAll("[data-pick-assessor]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const name = btn.dataset.pickAssessor;
-      if (state.finder.picked.assessor === name) {
-        state.finder.picked.assessor = "";
-        state.finder.picked.assessor_type = "province";
-      } else {
-        state.finder.picked.assessor = name;
-        state.finder.picked.assessor_type = btn.dataset.pickAssessorType || "province";
-      }
+    btn.onclick = () => {
+      state.finder.picked.assessor = btn.dataset.pickAssessor;
+      state.finder.picked.assessor_type = btn.dataset.pickAssessorType || "province";
+      toast(`Assessor set: ${state.finder.picked.assessor}`);
       renderFinder();
-    });
+    };
   });
   $("create-from-finder")?.addEventListener("click", () => {
     state.editingId = null;
-    const prefillData = { qualification: data.qualification, ...state.finder.picked };
-    state.prefill = prefillData;
-    switchView("scheduler", { prefill: prefillData });
+    state.prefill = picked;
+    state.schedulerTab = "entry";
+    switchView("scheduler", { prefill: picked });
   });
 }
 
@@ -1156,15 +1147,18 @@ function daysSinceLabel(days) {
 async function renderHistory() {
   const { qualification, assessor_type } = state.history;
   const tab = state.history.tab === "log" ? "log" : "rotation";
+  state.history.exportStart = state.history.exportStart || "";
+  state.history.exportEnd = state.history.exportEnd || "";
   const params = new URLSearchParams();
   if (qualification) params.set("qualification", qualification);
   if (assessor_type) params.set("assessor_type", assessor_type);
   const data = await api(`/api/assessor-rotation?${params.toString()}`);
+  const sourceLabel = assessor_type === "region" ? "region-based" : assessor_type === "province" ? "province-based" : "";
 
   const rotationPanel = !data.qualification ? `
     <p class="empty">Select a qualification above to see its assessor rotation — who's assessed it, when they last did, and who's next in line.</p>
   ` : `
-    <p class="hint">Rotation for <b>${escapeHtml(data.qualification)}</b> · sorted so whoever has gone longest without an assignment (or has never been assigned) is listed first. Click a row to see full assessment history.</p>
+    <p class="hint">Rotation for <b>${escapeHtml(data.qualification)}</b>${sourceLabel ? ` · ${sourceLabel} assessors only` : ""} · sorted so whoever has gone longest without an assignment (or has never been assigned) is listed first. Click a row to see full assessment history.</p>
     ${data.rotation.length ? `<div class="table-wrap desktop-table"><table>
       <thead><tr><th>#</th><th>Assessor</th><th>Type</th><th>Times Assessed</th><th>Last Assessed</th><th>Since</th></tr></thead>
       <tbody>
@@ -1189,15 +1183,18 @@ async function renderHistory() {
         </div>
         <div class="muted">Last assessed: ${row.last_assessment_date ? fmt(row.last_assessment_date) : "Never"} · ${escapeHtml(daysSinceLabel(row.days_since_last))}</div>
       </article>
-    `).join("")}</div>` : `<p class="empty">No assessors found for this qualification.</p>`}
+    `).join("")}</div>` : `<p class="empty">No ${sourceLabel || ""} assessors found for this qualification.</p>`}
   `;
 
+  state.historyLogPage = state.historyLogPage || 1;
+  const logPaged = paginate(data.assessment_log, state.historyLogPage);
+  state.historyLogPage = logPaged.page;
   const logPanel = `
-    <p class="hint">${data.qualification ? `Every recorded assessment for <b>${escapeHtml(data.qualification)}</b>` : "Every recorded assessment across all qualifications"}, most recent first.</p>
+    <p class="hint">${data.qualification ? `Every recorded assessment for <b>${escapeHtml(data.qualification)}</b>` : "Every recorded assessment across all qualifications"}${sourceLabel ? ` involving a ${sourceLabel} assessor` : ""}, most recent first.</p>
     ${data.assessment_log.length ? `<div class="table-wrap desktop-table"><table>
       <thead><tr><th>Date</th>${data.qualification ? "" : "<th>Qualification</th>"}<th>Assessment Center</th><th>Assessor(s)</th><th>Pax</th></tr></thead>
       <tbody>
-        ${data.assessment_log.map((item) => `
+        ${logPaged.pageItems.map((item) => `
           <tr class="log-row" data-open-assessment="${item.id}" style="cursor:pointer">
             <td>${escapeHtml(item.date_label)}</td>
             ${data.qualification ? "" : `<td>${escapeHtml(item.qualification)}</td>`}
@@ -1208,55 +1205,83 @@ async function renderHistory() {
         `).join("")}
       </tbody>
     </table></div>
-    <div class="mobile-records">${data.assessment_log.map((item) => `
+    <div class="mobile-records">${logPaged.pageItems.map((item) => `
       <article class="record-card" data-open-assessment="${item.id}" style="cursor:pointer">
         <h4>${escapeHtml(item.date_label)}</h4>
         <div class="muted">${data.qualification ? "" : `${escapeHtml(item.qualification)} · `}${escapeHtml(item.assessment_center)} · ${item.pax} pax</div>
         <div>${item.assessors.map((a) => `${escapeHtml(a.name)} (${a.assessor_type === "region" ? "Region" : "Province"})`).join(", ")}</div>
       </article>
-    `).join("")}</div>` : `<p class="empty">No recorded assessments yet.</p>`}
+    `).join("")}</div>
+    <div id="history-log-pagination">${paginationControls("history-log", logPaged.page, logPaged.totalPages, data.assessment_log.length)}</div>` : `<p class="empty">No recorded assessments yet.</p>`}
   `;
 
   $("view-history").innerHTML = `
     <div class="card">
-      <div class="toolbar">
+      <div class="scheduler-form-head" style="margin:-18px -18px 16px;">
+        <p class="eyebrow-tag">Assessor History</p>
+        <h3>${data.qualification ? escapeHtml(data.qualification) : "All qualifications"}</h3>
+        <p>Track who has assessed what, spot who's overdue for a turn, and review every past assessment.</p>
+      </div>
+      <div class="field full" style="max-width:420px">
         <label>Qualification</label>
         <select id="hist-qual">
           <option value="">All qualifications</option>
           ${optionList(data.qualifications, data.qualification)}
         </select>
-        <label>Assessor Type</label>
-        <select id="hist-type">
-          <option value="">All types</option>
-          <option value="province" ${data.assessor_type === "province" ? "selected" : ""}>Province-Based</option>
-          <option value="region" ${data.assessor_type === "region" ? "selected" : ""}>Region-Based</option>
-        </select>
+      </div>
+
+      <div class="row-actions" style="margin-top:16px; justify-content:space-between; align-items:center">
+        <div class="pill-tabs" id="hist-source-tabs">
+          <button type="button" class="tab-btn ${assessor_type === "province" ? "active" : ""}" data-source="province"><span class="tab-dot"></span>Province-Based</button>
+          <button type="button" class="tab-btn ${assessor_type === "region" ? "active" : ""}" data-source="region" data-region><span class="tab-dot"></span>Region-Based</button>
+          <button type="button" class="tab-btn ${assessor_type === "" ? "active" : ""}" data-source="">All</button>
+        </div>
         <button class="ghost" id="hist-reset" type="button">Clear filters</button>
       </div>
-      <div class="toolbar" style="margin-top:-6px">
-        <button class="${tab === "rotation" ? "primary" : "ghost"}" type="button" id="tab-rotation">Rotation Order</button>
-        <button class="${tab === "log" ? "primary" : "ghost"}" type="button" id="tab-log">Assessment History</button>
-        <a class="ghost" style="text-decoration:none;margin-left:auto" href="/api/assessor-rotation/export?qualification=${encodeURIComponent(data.qualification || "")}&assessor_type=${encodeURIComponent(data.assessor_type || "")}">Export to Excel</a>
+
+      <div class="row-actions" style="margin-top:14px; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px">
+        <div class="pill-tabs tabs-sm">
+          <button type="button" class="tab-btn ${tab === "rotation" ? "active" : ""}" id="tab-rotation">Rotation Order</button>
+          <button type="button" class="tab-btn ${tab === "log" ? "active" : ""}" id="tab-log">Assessment History</button>
+        </div>
+        <div class="row-actions" style="align-items:center">
+          <span class="muted" style="font-size:0.78rem;text-transform:uppercase;letter-spacing:0.06em">From</span>
+          <input type="date" id="hist-export-start" value="${state.history.exportStart}" title="Export from this date (inclusive)" style="padding:8px 10px" />
+          <span class="muted" style="font-size:0.78rem;text-transform:uppercase;letter-spacing:0.06em">To</span>
+          <input type="date" id="hist-export-end" value="${state.history.exportEnd}" title="Export up to this date (inclusive)" style="padding:8px 10px" />
+          <button class="ghost" type="button" id="hist-export-btn">Export to Excel</button>
+        </div>
       </div>
-      ${tab === "rotation" ? rotationPanel : logPanel}
+      <p class="hint" style="margin-top:6px">Leave the dates blank to export everything, or set a range to keep the export short — both dates are inclusive.</p>
+
+      <div style="margin-top:16px">
+        ${tab === "rotation" ? rotationPanel : logPanel}
+      </div>
     </div>
   `;
 
   const applyHistory = () => {
     state.history = {
       qualification: $("hist-qual").value,
-      assessor_type: $("hist-type").value,
+      assessor_type: state.history.assessor_type,
       tab: state.history.tab,
     };
+    state.historyLogPage = 1;
     renderHistory();
   };
-  ["hist-qual", "hist-type"].forEach((id) => {
-    $(id).onchange = applyHistory;
-  });
+  $("hist-qual").onchange = applyHistory;
   $("hist-reset").onclick = () => {
-    state.history = { qualification: "", assessor_type: "", tab: state.history.tab };
+    state.history = { qualification: "", assessor_type: "province", tab: state.history.tab };
+    state.historyLogPage = 1;
     renderHistory();
   };
+  document.querySelectorAll("#hist-source-tabs .tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.history.assessor_type = btn.dataset.source;
+      state.historyLogPage = 1;
+      renderHistory();
+    });
+  });
   $("tab-rotation")?.addEventListener("click", () => { state.history.tab = "rotation"; renderHistory(); });
   $("tab-log")?.addEventListener("click", () => { state.history.tab = "log"; renderHistory(); });
   document.querySelectorAll("[data-assessor-row]").forEach((el) => {
@@ -1265,8 +1290,30 @@ async function renderHistory() {
   document.querySelectorAll("[data-open-assessment]").forEach((el) => {
     el.addEventListener("click", () => {
       state.editingId = el.dataset.openAssessment;
+      state.schedulerTab = "entry";
       switchView("scheduler");
     });
+  });
+  bindPaginationControls(
+    "history-log-pagination",
+    () => { state.historyLogPage -= 1; renderHistory(); },
+    () => { state.historyLogPage += 1; renderHistory(); }
+  );
+  $("hist-export-start").addEventListener("change", (e) => { state.history.exportStart = e.target.value; });
+  $("hist-export-end").addEventListener("change", (e) => { state.history.exportEnd = e.target.value; });
+  $("hist-export-btn").addEventListener("click", () => {
+    const start = state.history.exportStart;
+    const end = state.history.exportEnd;
+    if (start && end && end < start) {
+      toast("End date must be on or after the start date.", "error");
+      return;
+    }
+    const exportParams = new URLSearchParams();
+    exportParams.set("qualification", data.qualification || "");
+    exportParams.set("assessor_type", data.assessor_type || "");
+    if (start) exportParams.set("start_date", start);
+    if (end) exportParams.set("end_date", end);
+    window.location.href = `/api/assessor-rotation/export?${exportParams.toString()}`;
   });
 }
 
@@ -1293,6 +1340,9 @@ function showAssessorHistory(row, qualification) {
 
 async function renderReps() {
   const people = await api("/api/representatives");
+  state.repsPage = state.repsPage || 1;
+  const repsPaged = paginate(people, state.repsPage);
+  state.repsPage = repsPaged.page;
   $("view-reps").innerHTML = `
     <div class="grid split">
       <div class="card">
@@ -1311,7 +1361,7 @@ async function renderReps() {
       </div>
       <div class="card">
         <h3>Existing representatives</h3>
-        ${people.length ? people.map((p) => `
+        ${people.length ? repsPaged.pageItems.map((p) => `
           <div class="task">
             <b>${escapeHtml(p.name)}</b>
             <span>${escapeHtml(p.position || "TESDA Representative")} ${p.contact ? "· " + escapeHtml(p.contact) : ""}</span>
@@ -1321,6 +1371,7 @@ async function renderReps() {
             </div>
           </div>
         `).join("") : `<p class="empty">No representatives yet. Add the people you assign to assessments.</p>`}
+        <div id="reps-pagination">${paginationControls("reps", repsPaged.page, repsPaged.totalPages, people.length)}</div>
       </div>
     </div>
   `;
@@ -1360,11 +1411,21 @@ async function renderReps() {
       await renderReps();
     };
   });
+  bindPaginationControls(
+    "reps-pagination",
+    () => { state.repsPage -= 1; renderReps(); },
+    () => { state.repsPage += 1; renderReps(); }
+  );
 }
 
 async function renderReports() {
   const { year, month, q } = state.report;
+  state.report.range = state.report.range || { startYear: year, startMonth: month, endYear: year, endMonth: month };
+  const range = state.report.range;
+  state.reportPage = state.reportPage || 1;
   const data = await api(`/api/reports?year=${year}&month=${month}&q=${encodeURIComponent(q)}`);
+  const reportPaged = paginate(data.items, state.reportPage);
+  state.reportPage = reportPaged.page;
   $("view-reports").innerHTML = `
     <div class="card">
       <div class="toolbar">
@@ -1373,42 +1434,66 @@ async function renderReports() {
         <input id="rep-q" placeholder="Search center, qualification, assessor" value="${escapeHtml(q)}" />
         <a class="primary" href="/api/reports/export?year=${year}&month=${month}" style="text-decoration:none">Export This Month</a>
       </div>
-      <div class="toolbar" style="margin-top:-6px">
-        <label class="muted" style="text-transform:none;letter-spacing:0">Export a range of months:</label>
-        <select id="range-start-month">${monthNames.map((name, i) => `<option value="${i + 1}" ${i + 1 === month ? "selected" : ""}>${name}</option>`).join("")}</select>
-        <input id="range-start-year" type="number" value="${year}" style="width:90px" />
-        <span class="muted">to</span>
-        <select id="range-end-month">${monthNames.map((name, i) => `<option value="${i + 1}" ${i + 1 === month ? "selected" : ""}>${name}</option>`).join("")}</select>
-        <input id="range-end-year" type="number" value="${year}" style="width:90px" />
-        <a class="ghost" id="range-export-link" style="text-decoration:none" href="#">Export Range</a>
+      <p class="hint">${data.items.length} assessment${data.items.length === 1 ? "" : "s"} in ${monthNames[month-1]} ${year}. Export uses the simplified Assessment Monitoring layout.</p>
+      <div class="table-wrap desktop-table" id="reports-table">${assessmentTable(reportPaged.pageItems)}</div>
+      <div class="mobile-records" id="reports-cards">${assessmentCards(reportPaged.pageItems)}</div>
+      <div id="reports-pagination">${paginationControls("reports", reportPaged.page, reportPaged.totalPages, data.items.length)}</div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h3>Export a month range</h3>
+      <p class="hint">Pick a start and end month. Each assessment is placed in exactly one sheet — its start month if that's within the range, otherwise the earliest month in range it overlaps — so a schedule spanning two months is never duplicated.</p>
+      <div class="toolbar">
+        <span class="muted" style="font-size:0.78rem;text-transform:uppercase;letter-spacing:0.06em">From</span>
+        <select id="range-start-month">${monthNames.map((name, i) => `<option value="${i+1}" ${i+1===range.startMonth?"selected":""}>${name}</option>`).join("")}</select>
+        <input id="range-start-year" type="number" value="${range.startYear}" style="width:110px" />
+        <span class="muted" style="font-size:0.78rem;text-transform:uppercase;letter-spacing:0.06em">To</span>
+        <select id="range-end-month">${monthNames.map((name, i) => `<option value="${i+1}" ${i+1===range.endMonth?"selected":""}>${name}</option>`).join("")}</select>
+        <input id="range-end-year" type="number" value="${range.endYear}" style="width:110px" />
+        <button type="button" class="primary" id="range-export-btn">Export month range</button>
       </div>
-      <p class="hint">${data.items.length} assessment${data.items.length === 1 ? "" : "s"} in ${monthNames[month-1]} ${year}. Exports use the print-ready Assessment Monitoring layout — a range exports one sheet per month in a single file.</p>
-      <div class="table-wrap desktop-table">${assessmentTable(data.items)}</div>
-      <div class="mobile-records">${assessmentCards(data.items)}</div>
     </div>
   `;
   const apply = () => {
     state.report.month = Number($("rep-month").value);
     state.report.year = Number($("rep-year").value);
     state.report.q = $("rep-q").value;
+    state.reportPage = 1;
     renderReports();
   };
   $("rep-month").onchange = apply;
   $("rep-year").onchange = apply;
   $("rep-q").addEventListener("input", debounce(apply, 250));
 
-  const updateRangeLink = () => {
-    const sm = String($("range-start-month").value).padStart(2, "0");
-    const sy = $("range-start-year").value;
-    const em = String($("range-end-month").value).padStart(2, "0");
-    const ey = $("range-end-year").value;
-    $("range-export-link").href = `/api/reports/export?start=${sy}-${sm}&end=${ey}-${em}`;
+  const syncRange = () => {
+    range.startMonth = Number($("range-start-month").value);
+    range.startYear = Number($("range-start-year").value);
+    range.endMonth = Number($("range-end-month").value);
+    range.endYear = Number($("range-end-year").value);
   };
   ["range-start-month", "range-start-year", "range-end-month", "range-end-year"].forEach((id) => {
-    $(id).addEventListener("change", updateRangeLink);
+    $(id).addEventListener("change", syncRange);
   });
-  updateRangeLink();
-
+  $("range-export-btn").addEventListener("click", () => {
+    syncRange();
+    const startIndex = range.startYear * 12 + (range.startMonth - 1);
+    const endIndex = range.endYear * 12 + (range.endMonth - 1);
+    if (endIndex < startIndex) {
+      toast("End month must be on or after the start month.", "error");
+      return;
+    }
+    const params = new URLSearchParams({
+      start_year: range.startYear,
+      start_month: range.startMonth,
+      end_year: range.endYear,
+      end_month: range.endMonth,
+    });
+    window.location.href = `/api/reports/export-range?${params.toString()}`;
+  });
+  bindPaginationControls(
+    "reports-pagination",
+    () => { state.reportPage -= 1; renderReports(); },
+    () => { state.reportPage += 1; renderReports(); }
+  );
   bindRecordButtons();
 }
 
@@ -1478,13 +1563,9 @@ async function renderSettings() {
       </div>
       <div class="card">
         <h3>Reminder rules</h3>
-        <p>Portal schedule reminder = assessment date minus 2 days. If that lands on a weekend, it's pushed back 2 more days so it always falls on a weekday.</p>
-        <p>Exception: a continuous (multi-day) assessment whose range runs into a Saturday or Sunday counts the weekend normally (no push-back) — <i>unless</i> it begins on a Monday or Tuesday, in which case the weekday-only rule still applies.</p>
+        <p>Single-day portal schedule = assessment date minus 2 days, with weekend adjustment to the preceding weekday.</p>
+        <p>Continuous assessments keep exactly minus 2 calendar days, including Saturday and Sunday.</p>
         <p>Results reminders are generated for every assessment date plus one day.</p>
-        <div class="row-actions" style="margin-top:14px">
-          <button class="ghost" id="recalc-dates">Recalculate all assessment dates</button>
-        </div>
-        <p class="muted" style="margin-top:8px">Run this once after a scheduling-rule change — it re-applies the current rules to every existing assessment. New assessments always use the current rules automatically; this only matters for ones created before a rule change.</p>
       </div>
     </div>
   `;
@@ -1495,8 +1576,8 @@ async function renderSettings() {
       body.set("kind", form.dataset.upload);
       try {
         const res = await fetch("/api/settings/upload", { method: "POST", body });
-        const json = await readJsonResponse(res);
-        if (!res.ok || json.ok === false) throw new Error(json.error || "Upload failed");
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || "Upload failed");
         toast("Excel file updated and reloaded.");
         await renderSettings();
       } catch (err) {
@@ -1510,8 +1591,8 @@ async function renderSettings() {
     if (!confirm("Importing a backup replaces assessments, representatives, and Excel registries on this computer. Continue?")) return;
     try {
       const res = await fetch("/api/backup/import", { method: "POST", body });
-      const json = await readJsonResponse(res);
-      if (!res.ok || json.ok === false) throw new Error(json.error || "Import failed");
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Import failed");
       toast(`Backup imported: ${json.assessments} assessments, ${json.representatives} representatives.`);
       await renderSettings();
     } catch (err) {
@@ -1523,15 +1604,6 @@ async function renderSettings() {
       await api("/api/settings/reload", { method: "POST" });
       toast("Excel data reloaded.");
       await renderSettings();
-    } catch (err) {
-      toast(err.message, "error");
-    }
-  };
-  $("recalc-dates").onclick = async () => {
-    if (!confirm("Recalculate approved/schedule/results dates for every existing assessment using the current rules? This cannot be undone.")) return;
-    try {
-      const result = await api("/api/assessments/recalculate-dates", { method: "POST" });
-      toast(`Recalculated ${result.total} assessments — ${result.changed} had date changes.`);
     } catch (err) {
       toast(err.message, "error");
     }
@@ -1613,6 +1685,7 @@ document.querySelectorAll(".nav button").forEach((btn) => {
 $("new-assessment-btn").addEventListener("click", () => {
   state.editingId = null;
   state.prefill = null;
+  state.schedulerTab = "entry";
   switchView("scheduler");
 });
 $("notify-btn").addEventListener("click", async () => {
@@ -1638,15 +1711,6 @@ setInterval(tickClock, 60_000);
   try {
     const settings = await api("/api/settings");
     applyTheme(settings.theme);
-    if (settings.mirror_mode) showMirrorBanner();
   } catch {}
   switchView("dashboard");
 })();
-
-function showMirrorBanner() {
-  const bar = document.createElement("div");
-  bar.id = "mirror-banner";
-  bar.style.cssText = "position:sticky;top:0;z-index:25;background:#7c2d12;color:#fff;padding:10px 16px;font-size:0.85rem;text-align:center;";
-  bar.innerHTML = "⚠️ This is a <b>read-only mirror</b>. Anything entered here (new assessments, checklist ticks, Excel uploads) will be lost on the next deploy. Make changes in the app running on your computer and push to GitHub instead.";
-  document.body.prepend(bar);
-}

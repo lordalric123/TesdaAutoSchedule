@@ -12,49 +12,6 @@ from openpyxl.worksheet.properties import PageSetupProperties
 
 from date_rules import parse_iso_date
 
-TITLE_FILL = PatternFill("solid", fgColor="1F4E79")
-SECTION_FILL = PatternFill("solid", fgColor="0F766E")
-HEADER_FILL = PatternFill("solid", fgColor="FFC000")
-ZEBRA_FILL = PatternFill("solid", fgColor="FFF2CC")
-THIN_BORDER = Border(
-    left=Side(style="thin", color="7F7F7F"),
-    right=Side(style="thin", color="7F7F7F"),
-    top=Side(style="thin", color="7F7F7F"),
-    bottom=Side(style="thin", color="7F7F7F"),
-)
-TITLE_FONT = Font(name="Calibri", size=16, bold=True, color="FFFFFF")
-SECTION_FONT = Font(name="Calibri", size=12, bold=True, color="FFFFFF")
-HEADER_FONT = Font(name="Calibri", size=11, bold=True)
-BODY_FONT = Font(name="Calibri", size=11)
-WRAP_ALIGN = Alignment(wrap_text=True, vertical="center")
-CENTER_ALIGN = Alignment(wrap_text=True, vertical="center", horizontal="center")
-
-
-def _make_print_ready(sheet, repeat_rows: str | None = None, paper_size=None) -> None:
-    """Apply the page setup needed for a sheet to print correctly straight out of
-    Excel with no manual adjustment: landscape, fit to one page wide (with the
-    fitToPage flag Excel actually reads — setting page_setup alone is not enough),
-    centered on the page, tight margins, and the header row repeating on every
-    printed page when the sheet runs longer than one page.
-    """
-    sheet.sheet_view.showGridLines = False
-    sheet.page_setup.orientation = "landscape"
-    sheet.page_setup.fitToWidth = 1
-    sheet.page_setup.fitToHeight = 0
-    if paper_size:
-        sheet.page_setup.paperSize = paper_size
-    # This is the part that's easy to miss: Excel ignores page_setup.fitToWidth /
-    # fitToHeight unless sheet_properties.pageSetUpPr.fitToPage is also set. Without
-    # it, the sheet opens looking like fit-to-page was never configured at all.
-    sheet.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
-    sheet.page_margins.left = 0.4
-    sheet.page_margins.right = 0.4
-    sheet.page_margins.top = 0.5
-    sheet.page_margins.bottom = 0.5
-    sheet.print_options.horizontalCentered = True
-    if repeat_rows:
-        sheet.print_title_rows = repeat_rows
-
 
 def compact_day_span(start: date, end: date) -> str:
     if start == end:
@@ -91,14 +48,37 @@ def compact_approved_dates(iso_dates: list[str]) -> str:
     return f"{first.month}/{first.day}/{first.year}-{last.month}/{last.day}/{last.year}"
 
 
-def _populate_monitoring_sheet(sheet, month_label: str, items: list[dict]) -> None:
-    _make_print_ready(sheet, repeat_rows="2:2", paper_size=sheet.PAPERSIZE_LEGAL)
+def _write_monitoring_sheet(sheet, month_label: str, items: list[dict]) -> None:
+    sheet.sheet_view.showGridLines = False
+    sheet.page_setup.orientation = "landscape"
+    sheet.page_setup.fitToPage = True
+    sheet.page_setup.fitToWidth = 1
+    sheet.page_setup.fitToHeight = 0
+    sheet.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
+    sheet.page_setup.paperSize = sheet.PAPERSIZE_LEGAL
+    sheet.page_margins.left = 0.4
+    sheet.page_margins.right = 0.4
+
+    title_fill = PatternFill("solid", fgColor="1F4E79")
+    header_fill = PatternFill("solid", fgColor="FFC000")
+    zebra = PatternFill("solid", fgColor="FFF2CC")
+    thin = Border(
+        left=Side(style="thin", color="7F7F7F"),
+        right=Side(style="thin", color="7F7F7F"),
+        top=Side(style="thin", color="7F7F7F"),
+        bottom=Side(style="thin", color="7F7F7F"),
+    )
+    title_font = Font(name="Calibri", size=16, bold=True, color="FFFFFF")
+    header_font = Font(name="Calibri", size=11, bold=True)
+    body_font = Font(name="Calibri", size=11)
+    wrap = Alignment(wrap_text=True, vertical="center")
+    center = Alignment(wrap_text=True, vertical="center", horizontal="center")
 
     sheet.merge_cells("A1:H1")
     title = sheet["A1"]
     title.value = f"ASSESSMENT SCHEDULES FOR {month_label.upper()}"
-    title.fill = TITLE_FILL
-    title.font = TITLE_FONT
+    title.fill = title_fill
+    title.font = title_font
     title.alignment = Alignment(horizontal="left", vertical="center")
     sheet.row_dimensions[1].height = 28
 
@@ -114,14 +94,13 @@ def _populate_monitoring_sheet(sheet, month_label: str, items: list[dict]) -> No
     ]
     for col, header in enumerate(headers, start=1):
         cell = sheet.cell(2, col, header)
-        cell.fill = HEADER_FILL
-        cell.font = HEADER_FONT
-        cell.alignment = CENTER_ALIGN
-        cell.border = THIN_BORDER
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = center
+        cell.border = thin
     sheet.row_dimensions[2].height = 22
     sheet.auto_filter.ref = f"A2:H{max(3, 2 + len(items))}"
     sheet.freeze_panes = "A3"
-    sheet.print_area = f"A1:H{max(3, 2 + len(items))}"
 
     for index, item in enumerate(items):
         row = 3 + index
@@ -138,12 +117,12 @@ def _populate_monitoring_sheet(sheet, month_label: str, items: list[dict]) -> No
             item.get("tesda_representative") or "",
             item.get("remarks") or "",
         ]
-        fill = ZEBRA_FILL if index % 2 else None
+        fill = zebra if index % 2 else None
         for col, value in enumerate(values, start=1):
             cell = sheet.cell(row, col, value)
-            cell.font = BODY_FONT
-            cell.alignment = CENTER_ALIGN if col in {1, 4, 5} else WRAP_ALIGN
-            cell.border = THIN_BORDER
+            cell.font = body_font
+            cell.alignment = center if col in {1, 4, 5} else wrap
+            cell.border = thin
             if fill:
                 cell.fill = fill
         line_count = max(1, assessor_text.count("\n") + 1)
@@ -159,7 +138,7 @@ def build_monitoring_workbook(year: int, month: int, items: list[dict]) -> Bytes
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = month_label[:31]
-    _populate_monitoring_sheet(sheet, month_label, items)
+    _write_monitoring_sheet(sheet, month_label, items)
 
     buffer = BytesIO()
     workbook.save(buffer)
@@ -167,20 +146,74 @@ def build_monitoring_workbook(year: int, month: int, items: list[dict]) -> Bytes
     return buffer
 
 
-def build_monitoring_workbook_range(months: list[tuple[int, int, list[dict]]]) -> BytesIO:
-    """Same print-ready layout as build_monitoring_workbook, but one sheet per
-    month, all in a single workbook — for exporting a range of months at once.
-    `months` is a list of (year, month, items) tuples, already in the order the
-    sheets should appear.
+def iter_months(start_year: int, start_month: int, end_year: int, end_month: int):
+    """Yield (year, month) tuples from the start month through the end month, inclusive."""
+    year, month = start_year, start_month
+    end_index = end_year * 12 + (end_month - 1)
+    while year * 12 + (month - 1) <= end_index:
+        yield year, month
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+
+
+def _month_bounds(year: int, month: int) -> tuple[date, date]:
+    month_start = date(year, month, 1)
+    month_end = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
+    return month_start, month_end
+
+
+def bucket_assessments_by_month(
+    items: list[dict], months: list[tuple[int, int]]
+) -> dict[tuple[int, int], list[dict]]:
+    """Place each assessment into exactly one month in `months`: its own start month if that
+    month is in range, otherwise the earliest month in range it overlaps. This keeps assessments
+    that span a month boundary (e.g. Sept 29 - Oct 2) from being duplicated across both sheets.
     """
+    buckets: dict[tuple[int, int], list[dict]] = {key: [] for key in months}
+    month_set = set(months)
+    for item in items:
+        start = parse_iso_date(item["start_date"])
+        end = parse_iso_date(item["end_date"])
+        start_key = (start.year, start.month)
+        if start_key in month_set:
+            buckets[start_key].append(item)
+            continue
+        placed = False
+        for key in months:
+            month_start, month_end = _month_bounds(*key)
+            if start < month_end and end >= month_start:
+                buckets[key].append(item)
+                placed = True
+                break
+        if not placed:
+            # Assessment doesn't actually overlap the exported range; skip it.
+            continue
+    return buckets
+
+
+def build_monitoring_workbook_range(
+    start_year: int, start_month: int, end_year: int, end_month: int, items: list[dict]
+) -> BytesIO:
+    months = list(iter_months(start_year, start_month, end_year, end_month))
+    buckets = bucket_assessments_by_month(items, months)
+
     workbook = Workbook()
-    first = True
-    for year, month, items in months:
+    workbook.remove(workbook.active)
+    used_titles: set[str] = set()
+    for key in months:
+        year, month = key
         month_label = date(year, month, 1).strftime("%B %Y")
-        sheet = workbook.active if first else workbook.create_sheet()
-        first = False
-        sheet.title = month_label[:31]
-        _populate_monitoring_sheet(sheet, month_label, items)
+        title = month_label[:31]
+        base_title, suffix = title, 2
+        while title in used_titles:
+            title = f"{base_title[:28]} ({suffix})"
+            suffix += 1
+        used_titles.add(title)
+        sheet = workbook.create_sheet(title=title)
+        month_items = sorted(buckets[key], key=lambda x: x["start_date"])
+        _write_monitoring_sheet(sheet, month_label, month_items)
 
     buffer = BytesIO()
     workbook.save(buffer)
@@ -195,15 +228,33 @@ def build_assessor_history_workbook(assessment_log: list[dict], title: str = "As
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "Assessor History"[:31]
-    _make_print_ready(sheet)
+    sheet.sheet_view.showGridLines = False
+    sheet.page_setup.orientation = "landscape"
+    sheet.page_setup.fitToPage = True
+    sheet.page_setup.fitToWidth = 1
+    sheet.page_setup.fitToHeight = 0
+    sheet.page_margins.left = 0.4
+    sheet.page_margins.right = 0.4
 
-    title_fill, qual_fill, header_fill, zebra = TITLE_FILL, SECTION_FILL, HEADER_FILL, ZEBRA_FILL
-    thin = THIN_BORDER
-    title_font, qual_font, header_font, body_font = TITLE_FONT, SECTION_FONT, HEADER_FONT, BODY_FONT
-    wrap, center = WRAP_ALIGN, CENTER_ALIGN
+    title_fill = PatternFill("solid", fgColor="1F4E79")
+    qual_fill = PatternFill("solid", fgColor="0F766E")
+    header_fill = PatternFill("solid", fgColor="FFC000")
+    zebra = PatternFill("solid", fgColor="FFF2CC")
+    thin = Border(
+        left=Side(style="thin", color="7F7F7F"),
+        right=Side(style="thin", color="7F7F7F"),
+        top=Side(style="thin", color="7F7F7F"),
+        bottom=Side(style="thin", color="7F7F7F"),
+    )
+    title_font = Font(name="Calibri", size=16, bold=True, color="FFFFFF")
+    qual_font = Font(name="Calibri", size=12, bold=True, color="FFFFFF")
+    header_font = Font(name="Calibri", size=11, bold=True)
+    body_font = Font(name="Calibri", size=11)
+    wrap = Alignment(wrap_text=True, vertical="center")
+    center = Alignment(wrap_text=True, vertical="center", horizontal="center")
 
-    headers = ["Date", "Assessment Center", "Assessor(s)", "Pax", "TESDA Representative"]
-    widths = [18, 36, 36, 10, 26]
+    headers = ["Assessor(s)", "Assessment Center", "Date", "Pax", "TESDA Representative"]
+    widths = [36, 36, 18, 10, 26]
 
     grouped: dict[str, list[dict]] = {}
     for item in assessment_log:
@@ -251,9 +302,9 @@ def build_assessor_history_workbook(assessment_log: list[dict], title: str = "As
                     for a in item.get("assessors") or []
                 )
                 values = [
-                    item.get("date_label") or "",
-                    item.get("assessment_center") or "",
                     assessor_names,
+                    item.get("assessment_center") or "",
+                    item.get("date_label") or "",
                     item.get("pax") or "",
                     item.get("tesda_representative") or "",
                 ]
@@ -261,7 +312,7 @@ def build_assessor_history_workbook(assessment_log: list[dict], title: str = "As
                 for col, value in enumerate(values, start=1):
                     cell = sheet.cell(row, col, value)
                     cell.font = body_font
-                    cell.alignment = center if col in {1, 4} else wrap
+                    cell.alignment = center if col in {3, 4} else wrap
                     cell.border = thin
                     if fill:
                         cell.fill = fill
@@ -271,106 +322,6 @@ def build_assessor_history_workbook(assessment_log: list[dict], title: str = "As
 
     for index, width in enumerate(widths, start=1):
         sheet.column_dimensions[get_column_letter(index)].width = width
-
-    buffer = BytesIO()
-    workbook.save(buffer)
-    buffer.seek(0)
-    return buffer
-
-
-def _write_assessor_sheet(
-    sheet,
-    qualification: str,
-    rows: list[dict],
-    include_type: bool,
-) -> None:
-    """Fill one sheet with a print-ready table of assessors for a qualification.
-    include_type adds a Type column (Province-Based/Region-Based) — used for the
-    combined "Both" sheet where the two groups are mixed together.
-    """
-    _make_print_ready(sheet, repeat_rows="2:2")
-
-    headers = ["Name"]
-    if include_type:
-        headers.append("Type")
-    headers += ["Sex", "Address", "Designation", "Company / Employer", "Sector", "Accreditation No.", "Valid Until"]
-
-    sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
-    title_cell = sheet.cell(1, 1, f"{qualification.upper()} — ASSESSORS")
-    title_cell.fill = TITLE_FILL
-    title_cell.font = TITLE_FONT
-    title_cell.alignment = Alignment(horizontal="left", vertical="center")
-    sheet.row_dimensions[1].height = 28
-
-    for col, header in enumerate(headers, start=1):
-        cell = sheet.cell(2, col, header)
-        cell.fill = HEADER_FILL
-        cell.font = HEADER_FONT
-        cell.alignment = CENTER_ALIGN
-        cell.border = THIN_BORDER
-    sheet.row_dimensions[2].height = 22
-    last_row = max(3, 2 + len(rows))
-    sheet.auto_filter.ref = f"A2:{get_column_letter(len(headers))}{last_row}"
-    sheet.freeze_panes = "A3"
-    sheet.print_area = f"A1:{get_column_letter(len(headers))}{last_row}"
-
-    sorted_rows = sorted(rows, key=lambda r: (r.get("display_name") or r.get("name") or "").casefold())
-    for index, person in enumerate(sorted_rows):
-        row = 3 + index
-        values = [person.get("display_name") or person.get("name") or ""]
-        if include_type:
-            values.append("Region-Based" if person.get("assessor_type") == "region" else "Province-Based")
-        values += [
-            person.get("sex") or "",
-            person.get("address") or "",
-            person.get("designation") or "",
-            person.get("company") or "",
-            person.get("sector") or "",
-            person.get("accreditation_number") or "",
-            person.get("valid_until") or "",
-        ]
-        fill = ZEBRA_FILL if index % 2 else None
-        for col, value in enumerate(values, start=1):
-            cell = sheet.cell(row, col, value)
-            cell.font = BODY_FONT
-            cell.alignment = CENTER_ALIGN if col in ({2, 3} if include_type else {2}) else WRAP_ALIGN
-            cell.border = THIN_BORDER
-            if fill:
-                cell.fill = fill
-        sheet.row_dimensions[row].height = 26
-
-    if not rows:
-        empty_cell = sheet.cell(3, 1, "No assessors on record for this qualification.")
-        empty_cell.font = BODY_FONT
-
-    name_width = 28
-    widths = [name_width]
-    if include_type:
-        widths.append(16)
-    widths += [8, 34, 24, 24, 16, 18, 14]
-    for index, width in enumerate(widths, start=1):
-        sheet.column_dimensions[get_column_letter(index)].width = width
-
-
-def build_finder_workbook(
-    qualification: str,
-    province_assessors: list[dict],
-    region_assessors: list[dict],
-) -> BytesIO:
-    """Three print-ready sheets for one qualification: Province Based Assessors,
-    Region Based Assessors, and Both (combined, with a Type column to tell them apart).
-    """
-    workbook = Workbook()
-
-    sheet_province = workbook.active
-    sheet_province.title = "Province Based Assessors"[:31]
-    _write_assessor_sheet(sheet_province, qualification, province_assessors, include_type=False)
-
-    sheet_region = workbook.create_sheet("Region Based Assessors"[:31])
-    _write_assessor_sheet(sheet_region, qualification, region_assessors, include_type=False)
-
-    sheet_both = workbook.create_sheet("Both"[:31])
-    _write_assessor_sheet(sheet_both, qualification, province_assessors + region_assessors, include_type=True)
 
     buffer = BytesIO()
     workbook.save(buffer)

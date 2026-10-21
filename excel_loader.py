@@ -176,6 +176,8 @@ class ExcelRegistry:
             )
             if row["qualification"] not in item["qualifications"]:
                 item["qualifications"].append(row["qualification"])
+        for item in grouped.values():
+            item["qualifications"].sort(key=str.casefold)
         return sorted(grouped.values(), key=lambda x: x["name"].casefold())
 
     def qualifications_for_center(self, center: str) -> list[str]:
