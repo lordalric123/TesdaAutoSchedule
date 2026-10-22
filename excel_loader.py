@@ -57,6 +57,28 @@ def _stringify(value) -> str:
     return text
 
 
+def _stringify_date(value) -> str:
+    """Like _stringify, but for date-ish columns (birthdate, valid-until, date accredited).
+    Excel sometimes stores these as real dates and sometimes as free text (e.g. "12/31/2026",
+    "Dec 31 2026"); normalize whatever is parseable to ISO so the UI can format it, and fall
+    back to the original text (e.g. "Lifetime") when it genuinely isn't a date.
+    """
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return ""
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d")
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "nat", "none", "n/a", "na"}:
+        return ""
+    try:
+        parsed = pd.to_datetime(text, errors="raise")
+    except (ValueError, TypeError):
+        return text
+    if pd.isna(parsed):
+        return text
+    return parsed.strftime("%Y-%m-%d")
+
+
 def _read_excel(path: Path) -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(f"Excel file not found: {path}")
@@ -258,8 +280,11 @@ def _group_assessors(rows: list[dict], qualification: str | None = None) -> list
                 "display_name": row["name"],
                 "identity_key": row["identity_key"],
                 "assessor_type": row["source"],
+                "region": row["region"],
+                "province": row["province"],
                 "address": row["address"],
                 "sex": row["sex"],
+                "date_of_birth": row["date_of_birth"],
                 "designation": row["designation"],
                 "company": row["company"],
                 "sector": row["sector"],
@@ -273,6 +298,12 @@ def _group_assessors(rows: list[dict], qualification: str | None = None) -> list
         if not item["accreditation_number"] and row["accreditation_number"]:
             item["accreditation_number"] = row["accreditation_number"]
             item["valid_until"] = row["valid_until"]
+        if not item["region"] and row["region"]:
+            item["region"] = row["region"]
+        if not item["province"] and row["province"]:
+            item["province"] = row["province"]
+        if not item["date_of_birth"] and row["date_of_birth"]:
+            item["date_of_birth"] = row["date_of_birth"]
 
     name_counts: dict[str, int] = {}
     for item in grouped.values():
@@ -300,8 +331,8 @@ def _center_record(row: pd.Series) -> dict:
         "qualification": qualification,
         "qualification_key": normalize_key(qualification),
         "accreditation_number": _stringify(row.get("ACCREDITATION NUMBER")),
-        "date_accredited": _stringify(row.get("DATE ACCREDITED")),
-        "valid_until": _stringify(row.get("VALID UNTIL")),
+        "date_accredited": _stringify_date(row.get("DATE ACCREDITED")),
+        "valid_until": _stringify_date(row.get("VALID UNTIL")),
     }
 
 
@@ -309,7 +340,7 @@ def _assessor_record(row: pd.Series, source: str) -> dict:
     name = normalize_text(row.get("NAME"))
     qualification = normalize_text(row.get("QUALIFICATION TITLE"))
     accreditation = _stringify(row.get("ACCREDITATION NUMBER"))
-    birth = _stringify(row.get("DATE OF BIRTH"))
+    birth = _stringify_date(row.get("DATE OF BIRTH"))
     address = _stringify(row.get("ADDRESS"))
     return {
         "source": source,
@@ -327,5 +358,5 @@ def _assessor_record(row: pd.Series, source: str) -> dict:
         "qualification": qualification,
         "qualification_key": normalize_key(qualification),
         "accreditation_number": accreditation,
-        "valid_until": _stringify(row.get("VALID UNTIL")),
+        "valid_until": _stringify_date(row.get("VALID UNTIL")),
     }

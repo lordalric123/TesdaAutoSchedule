@@ -140,6 +140,22 @@ function applyTheme(theme) {
   document.body.style.backgroundColor = theme.background;
 }
 
+function applyBranding(branding) {
+  if (!branding) return;
+  state.branding = branding;
+  const mark = $("brand-mark");
+  if (mark) {
+    mark.innerHTML = branding.logo_url
+      ? `<img src="${escapeHtml(branding.logo_url)}" alt="Logo" />`
+      : escapeHtml(branding.initials || "TL");
+    mark.classList.toggle("has-image", Boolean(branding.logo_url));
+  }
+  if ($("brand-kicker")) $("brand-kicker").textContent = branding.kicker || "";
+  if ($("brand-title")) $("brand-title").textContent = branding.title || "";
+  if ($("brand-sub")) $("brand-sub").textContent = branding.sub || "";
+  document.title = branding.title ? `${branding.title} · Assessment Scheduler` : "Assessment Scheduler";
+}
+
 async function refreshLookups() {
   state.centers = await api("/api/centers");
   state.representatives = await api("/api/representatives");
@@ -242,7 +258,12 @@ async function renderDashboard() {
 
 function fmt(iso) {
   if (!iso) return "—";
-  const d = new Date(`${iso}T00:00:00`);
+  let d = new Date(`${iso}T00:00:00`);
+  if (isNaN(d.getTime())) d = new Date(iso);
+  // Some Excel sheets store these as free text rather than real dates (e.g. "Lifetime",
+  // a non-ISO format). When it genuinely can't be parsed, show the original text instead
+  // of a useless "Invalid Date".
+  if (isNaN(d.getTime())) return iso;
   return d.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
 }
 
@@ -272,13 +293,12 @@ function previousBusinessDay(date) {
   while (isWeekendDate(c)) c = addDays(c, -1);
   return c;
 }
-function scheduleReminderDate(date, durationType) {
-  if (durationType === "single") {
-    let r = date;
-    for (let i = 0; i < 2; i++) r = previousBusinessDay(r);
-    return r;
-  }
-  return addDays(date, -2);
+function scheduleReminderDate(date) {
+  // Always minus 2 business days (weekends skipped), per assessment date — matches
+  // date_rules.py's schedule_reminder_for_assessment_date for both single and continuous.
+  let r = date;
+  for (let i = 0; i < 2; i++) r = previousBusinessDay(r);
+  return r;
 }
 function assessmentDateRange(startIso, endIso) {
   const start = parseLocalDate(startIso);
@@ -298,7 +318,7 @@ function calculatedApprovedDates(startIso, endIso, durationType) {
     : [startIso];
   return assessmentDates.map((iso) => ({
     assessment_date: iso,
-    date: toISODate(scheduleReminderDate(parseLocalDate(iso), durationType)),
+    date: toISODate(scheduleReminderDate(parseLocalDate(iso))),
   }));
 }
 
@@ -998,6 +1018,55 @@ async function toggleTask(taskId, done, iso) {
   showDay(iso);
 }
 
+// Full detail card for a Finder assessor — every field the Excel sheet carries for them,
+// not just a name and a "Use assessor" button.
+function finderAssessorKey(a) {
+  return `${a.assessor_type || "province"}:${a.identity_key || a.name}`;
+}
+
+function finderAssessorCardHtml(a, picked, expanded) {
+  const assessorType = a.assessor_type || "province";
+  const isPicked = picked.assessor === a.name && picked.assessor_type === assessorType;
+  const key = finderAssessorKey(a);
+  const isExpanded = Boolean(expanded[key]);
+  const details = [
+    ["Region", a.region],
+    ["Province", a.province],
+    ["Address", a.address],
+    ["Sex", a.sex],
+    ["Date of Birth", a.date_of_birth ? fmt(a.date_of_birth) : ""],
+    ["Present Designation", a.designation],
+    ["Company", a.company],
+    ["Sector", a.sector],
+    ["Accreditation No.", a.accreditation_number],
+    ["Valid Until", a.valid_until ? fmt(a.valid_until) : ""],
+  ].filter(([, value]) => value);
+  const summary = [a.designation, a.company].filter(Boolean).join(" · ");
+  return `
+    <div class="task finder-assessor-card ${isPicked ? "task-picked" : ""}">
+      <div class="finder-assessor-head">
+        <div class="finder-assessor-name">
+          <b>${escapeHtml(a.display_name || a.name)}</b>
+          ${!isExpanded && summary ? `<span class="muted" style="font-size:0.82rem">${escapeHtml(summary)}</span>` : ""}
+        </div>
+        <div class="row-actions" style="align-items:center; gap:8px; flex-wrap:nowrap">
+          <span class="chip ${assessorType === "region" ? "gold" : ""}">${assessorType === "region" ? "Region-Based" : "Province-Based"}</span>
+          ${details.length ? `<button type="button" class="linkish finder-assessor-toggle" data-assessor-key="${escapeHtml(key)}">${isExpanded ? "Hide details ▴" : "Show details ▾"}</button>` : ""}
+        </div>
+      </div>
+      ${isExpanded && details.length ? `<dl class="assessment-card-grid" style="margin-top:8px">
+        ${details.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}
+      </dl>` : ""}
+      ${isExpanded && a.qualifications && a.qualifications.length ? `<p class="muted" style="font-size:0.8rem; margin-top:8px">Accredited for: ${escapeHtml(a.qualifications.join("; "))}</p>` : ""}
+      <div class="row-actions" style="margin-top:10px">
+        <button class="ghost" data-pick-assessor="${escapeHtml(a.name)}" data-pick-assessor-type="${escapeHtml(assessorType)}">
+          ${isPicked ? "Selected ✓" : "Use assessor"}
+        </button>
+      </div>
+    </div>
+  `;
+}
+
 async function renderFinder() {
   const query = state.finder.query;
   // Always fetch the full (unfiltered) assessor list and split it client-side for the two
@@ -1012,6 +1081,7 @@ async function renderFinder() {
     state.finder.picked = { qualification: data.qualification, assessment_center: "", assessor: "", assessor_type: "province" };
   }
   const picked = state.finder.picked;
+  state.finder.expanded = state.finder.expanded || {};
 
   const provinceAssessors = data.assessors.filter((a) => (a.assessor_type || "province") === "province");
   const regionAssessors = data.assessors.filter((a) => a.assessor_type === "region");
@@ -1025,66 +1095,56 @@ async function renderFinder() {
         <p>Look up who's eligible to assess a qualification and where, then jump straight into scheduling.</p>
       </div>
       <div class="toolbar">
-        <input id="finder-q" placeholder="Search qualification, e.g. Computer" value="${escapeHtml(query)}" />
+        <input id="finder-q" placeholder="Search qualification, e.g. Computer" value="${escapeHtml(query)}" style="flex:1; min-width:180px" />
+        <select id="finder-qual-select" style="flex:2; min-width:220px">
+          <option value="">${data.suggestions.length ? "Select a qualification…" : "No qualifications match that search"}</option>
+          ${data.suggestions.map((q) => `<option value="${escapeHtml(q)}" ${q === data.qualification ? "selected" : ""}>${escapeHtml(q)}</option>`).join("")}
+        </select>
         <button class="ghost" id="finder-clear">Clear</button>
       </div>
-      <div class="grid two" style="margin-top:16px">
-        <div>
-          <h3>Qualifications</h3>
-          <div class="finder-list">
-            ${data.suggestions.length ? data.suggestions.map((q) => `
-              <button class="pick ${q === data.qualification ? "selected" : ""}" data-qual="${escapeHtml(q)}">${escapeHtml(q)}</button>
-            `).join("") : `<p class="empty">No qualifications match that search.</p>`}
+      ${data.qualification ? `
+        <p class="hint" style="margin-top:14px">Assessors found: ${data.assessor_count} · Assessment centers found: ${data.center_count}</p>
+
+        <div class="pill-tabs" id="finder-source-tabs">
+          <button type="button" class="tab-btn ${source === "province" ? "active" : ""}" data-source="province">
+            <span class="tab-dot"></span>Province-Based <span class="tab-count">${provinceAssessors.length}</span>
+          </button>
+          <button type="button" class="tab-btn ${source === "region" ? "active" : ""}" data-source="region" data-region>
+            <span class="tab-dot"></span>Region-Based <span class="tab-count">${regionAssessors.length}</span>
+          </button>
+        </div>
+
+        <div class="grid two" style="margin-top:14px; align-items:start">
+          <div>
+            <div class="row-actions" style="justify-content:space-between; align-items:center; margin-bottom:10px">
+              <h3 style="margin:0">Available assessors</h3>
+              ${activeAssessors.length ? `<div class="row-actions">
+                <button type="button" class="linkish" id="finder-expand-all">Expand all</button>
+                <button type="button" class="linkish" id="finder-collapse-all">Collapse all</button>
+              </div>` : ""}
+            </div>
+            ${activeAssessors.length ? activeAssessors.map((a) => finderAssessorCardHtml(a, picked, state.finder.expanded)).join("") : `<p class="empty">No ${source === "region" ? "region-based" : "province-based"} assessors found for this qualification.</p>`}
+          </div>
+          <div>
+            <h3 style="margin:0 0 10px">Assessment centers</h3>
+            ${data.centers.length ? data.centers.map((c) => `
+              <div class="task ${picked.assessment_center === c.name ? "task-picked" : ""}">
+                <b>${escapeHtml(c.name)}</b>
+                <span>${escapeHtml(c.address || "")}${c.manager ? " · " + escapeHtml(c.manager) : ""}</span>
+                ${c.telephone ? `<span>Tel: ${escapeHtml(c.telephone)}</span>` : ""}
+                ${c.sector ? `<span>Sector: ${escapeHtml(c.sector)}</span>` : ""}
+                <div class="row-actions" style="margin-top:8px">
+                  <button class="ghost" data-pick-center="${escapeHtml(c.name)}">${picked.assessment_center === c.name ? "Selected ✓" : "Use center"}</button>
+                </div>
+              </div>
+            `).join("") : `<p class="empty">No assessment centers found for this qualification.</p>`}
           </div>
         </div>
-        <div>
-          ${data.qualification ? `
-            <p class="hint">Assessors found: ${data.assessor_count} · Assessment centers found: ${data.center_count}</p>
-
-            <div class="pill-tabs" id="finder-source-tabs">
-              <button type="button" class="tab-btn ${source === "province" ? "active" : ""}" data-source="province">
-                <span class="tab-dot"></span>Province-Based <span class="tab-count">${provinceAssessors.length}</span>
-              </button>
-              <button type="button" class="tab-btn ${source === "region" ? "active" : ""}" data-source="region" data-region>
-                <span class="tab-dot"></span>Region-Based <span class="tab-count">${regionAssessors.length}</span>
-              </button>
-            </div>
-
-            <div class="grid two" style="margin-top:14px">
-              <div>
-                <h3 style="margin:0 0 10px">Available assessors</h3>
-                ${activeAssessors.length ? activeAssessors.map((a) => `
-                  <div class="task ${picked.assessor === a.name && picked.assessor_type === (a.assessor_type || "province") ? "task-picked" : ""}">
-                    <b>${escapeHtml(a.display_name || a.name)}</b>
-                    <span>${escapeHtml(a.address || "No address")} · ${escapeHtml(a.designation || a.company || "")}</span>
-                    <div class="row-actions" style="margin-top:8px">
-                      <button class="ghost" data-pick-assessor="${escapeHtml(a.name)}" data-pick-assessor-type="${escapeHtml(a.assessor_type || "province")}">
-                        ${picked.assessor === a.name && picked.assessor_type === (a.assessor_type || "province") ? "Selected ✓" : "Use assessor"}
-                      </button>
-                    </div>
-                  </div>
-                `).join("") : `<p class="empty">No ${source === "region" ? "region-based" : "province-based"} assessors found for this qualification.</p>`}
-              </div>
-              <div>
-                <h3 style="margin:0 0 10px">Assessment centers</h3>
-                ${data.centers.length ? data.centers.map((c) => `
-                  <div class="task ${picked.assessment_center === c.name ? "task-picked" : ""}">
-                    <b>${escapeHtml(c.name)}</b>
-                    <span>${escapeHtml(c.address || "")}${c.manager ? " · " + escapeHtml(c.manager) : ""}</span>
-                    <div class="row-actions" style="margin-top:8px">
-                      <button class="ghost" data-pick-center="${escapeHtml(c.name)}">${picked.assessment_center === c.name ? "Selected ✓" : "Use center"}</button>
-                    </div>
-                  </div>
-                `).join("") : `<p class="empty">No assessment centers found for this qualification.</p>`}
-              </div>
-            </div>
-            <div class="row-actions" style="margin-top:16px; align-items:center">
-              <button class="primary" id="create-from-finder">Create assessment</button>
-              ${picked.assessment_center || picked.assessor ? `<span class="muted">${escapeHtml([picked.assessment_center, picked.assessor].filter(Boolean).join(" · "))}</span>` : ""}
-            </div>
-          ` : `<p class="empty">Select a qualification to see assessors and centers.</p>`}
+        <div class="row-actions" style="margin-top:16px; align-items:center">
+          <button class="primary" id="create-from-finder">Create assessment</button>
+          ${picked.assessment_center || picked.assessor ? `<span class="muted">${escapeHtml([picked.assessment_center, picked.assessor].filter(Boolean).join(" · "))}</span>` : ""}
         </div>
-      </div>
+      ` : `<p class="empty" style="margin-top:14px">Select a qualification above to see assessors and centers.</p>`}
     </div>
   `;
   const box = $("finder-q");
@@ -1097,14 +1157,30 @@ async function renderFinder() {
     state.finder = { query: "", selected: "", source: state.finder.source, picked: null };
     renderFinder();
   };
-  document.querySelectorAll("[data-qual]").forEach((btn) => {
-    btn.onclick = () => { state.finder.selected = btn.dataset.qual; renderFinder(); };
+  $("finder-qual-select").addEventListener("change", (event) => {
+    state.finder.selected = event.target.value;
+    renderFinder();
   });
   document.querySelectorAll("#finder-source-tabs .tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       state.finder.source = btn.dataset.source;
       renderFinder();
     });
+  });
+  document.querySelectorAll(".finder-assessor-toggle").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const key = btn.dataset.assessorKey;
+      state.finder.expanded[key] = !state.finder.expanded[key];
+      renderFinder();
+    });
+  });
+  $("finder-expand-all")?.addEventListener("click", () => {
+    activeAssessors.forEach((a) => { state.finder.expanded[finderAssessorKey(a)] = true; });
+    renderFinder();
+  });
+  $("finder-collapse-all")?.addEventListener("click", () => {
+    activeAssessors.forEach((a) => { state.finder.expanded[finderAssessorKey(a)] = false; });
+    renderFinder();
   });
   document.querySelectorAll("[data-pick-center]").forEach((btn) => {
     btn.onclick = () => {
@@ -1537,6 +1613,32 @@ async function renderSettings() {
         </form>
       </div>
       <div class="card">
+        <h3>Branding / Logo</h3>
+        <p class="hint">Customize the logo and organization name shown in the sidebar.</p>
+        <div class="branding-preview">
+          <div class="brand-mark ${data.branding?.logo_url ? "has-image" : ""}" id="branding-mark-preview">
+            ${data.branding?.logo_url ? `<img src="${escapeHtml(data.branding.logo_url)}" alt="Logo" />` : escapeHtml(data.branding?.initials || "TL")}
+          </div>
+          <div class="row-actions" style="flex-wrap:wrap">
+            <label class="ghost" style="cursor:pointer; display:inline-flex; align-items:center;">
+              Upload logo image
+              <input type="file" id="logo-upload" accept="image/png,image/jpeg,image/webp,image/svg+xml" style="display:none" />
+            </label>
+            ${data.branding?.logo_url ? `<button class="ghost" id="logo-remove" type="button">Remove logo</button>` : ""}
+          </div>
+          <p class="muted" style="font-size:0.78rem">PNG, JPG, WEBP, or SVG, up to 3 MB. Without a logo, the initials below are shown instead.</p>
+        </div>
+        <form id="branding-form" class="form-grid" style="margin-top:14px">
+          <div class="field"><label>Initials (shown without a logo)</label><input name="initials" maxlength="4" value="${escapeHtml(data.branding?.initials || "")}" /></div>
+          <div class="field"><label>Kicker text</label><input name="kicker" value="${escapeHtml(data.branding?.kicker || "")}" placeholder="e.g. TESDA Region VIII" /></div>
+          <div class="field full"><label>Organization name</label><input name="title" required value="${escapeHtml(data.branding?.title || "")}" placeholder="e.g. Southern Leyte" /></div>
+          <div class="field full"><label>Subtitle</label><input name="sub" value="${escapeHtml(data.branding?.sub || "")}" placeholder="e.g. Competency Assessment Control" /></div>
+          <div class="field full row-actions">
+            <button class="primary" type="submit">Save branding</button>
+          </div>
+        </form>
+      </div>
+      <div class="card">
         <h3>UI theme</h3>
         <p class="hint">Choose a preset or set custom colors. Preferences are saved and restored after reload.</p>
         <div class="field">
@@ -1563,8 +1665,8 @@ async function renderSettings() {
       </div>
       <div class="card">
         <h3>Reminder rules</h3>
-        <p>Single-day portal schedule = assessment date minus 2 days, with weekend adjustment to the preceding weekday.</p>
-        <p>Continuous assessments keep exactly minus 2 calendar days, including Saturday and Sunday.</p>
+        <p>Portal schedule = assessment date minus 2 business days (weekends skipped), calculated separately for each assessment date — including every day of a continuous/multi-day run.</p>
+        <p>Any approved/portal schedule date can also be edited by hand in Assessment Entry if the actual portal date ends up different.</p>
         <p>Results reminders are generated for every assessment date plus one day.</p>
       </div>
     </div>
@@ -1608,6 +1710,44 @@ async function renderSettings() {
       toast(err.message, "error");
     }
   };
+  $("branding-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const payload = formValues(event.currentTarget);
+    try {
+      const res = await api("/api/settings/branding", { method: "POST", headers: jsonHeaders(), body: JSON.stringify(payload) });
+      applyBranding(res.branding);
+      toast("Branding saved.");
+      await renderSettings();
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  });
+  $("logo-upload").addEventListener("change", async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    const body = new FormData();
+    body.set("file", file);
+    try {
+      const res = await fetch("/api/settings/branding/logo", { method: "POST", body });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Upload failed");
+      applyBranding(json.branding);
+      toast("Logo updated.");
+      await renderSettings();
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  });
+  $("logo-remove")?.addEventListener("click", async () => {
+    try {
+      const res = await api("/api/settings/branding/logo/reset", { method: "POST" });
+      applyBranding(res.branding);
+      toast("Logo removed.");
+      await renderSettings();
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  });
   applyTheme(data.theme);
   const presets = data.theme_presets || {};
   const collectTheme = () => {
@@ -1711,6 +1851,7 @@ setInterval(tickClock, 60_000);
   try {
     const settings = await api("/api/settings");
     applyTheme(settings.theme);
+    applyBranding(settings.branding);
   } catch {}
   switchView("dashboard");
 })();

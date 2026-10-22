@@ -11,6 +11,7 @@ import zipfile
 from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import quote
 
 from flask import Flask, jsonify, request, send_file, send_from_directory
 from werkzeug.utils import secure_filename
@@ -113,6 +114,25 @@ THEME_PRESETS = {
     },
 }
 
+DEFAULT_BRANDING = {
+    "initials": "TL",
+    "kicker": "TESDA Region VIII",
+    "title": "Southern Leyte",
+    "sub": "Competency Assessment Control",
+    "logo_filename": "",
+    "logo_version": "",
+}
+BRANDING_DIR_NAME = "branding"
+LOGO_ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".svg"}
+LOGO_MIME_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+}
+LOGO_MAX_BYTES = 3 * 1024 * 1024
+
 app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
 registry = ExcelRegistry()
 settings_store = JsonStore(
@@ -123,8 +143,10 @@ settings_store = JsonStore(
         "region_assessors_path": str(DEFAULT_REGION_ASSESSORS),
         "assessors_path": str(DEFAULT_PROVINCE_ASSESSORS),
         "theme": dict(DEFAULT_THEME),
+        "branding": dict(DEFAULT_BRANDING),
     },
 )
+BRANDING_DIR = DATA_DIR / BRANDING_DIR_NAME
 assessments_store = JsonStore(DATA_DIR / "assessments.json", [])
 representatives_store = JsonStore(DATA_DIR / "representatives.json", [])
 task_status_store = JsonStore(DATA_DIR / "task_status.json", {})
@@ -147,6 +169,9 @@ def normalize_settings(raw: dict | None = None) -> dict:
     theme = dict(DEFAULT_THEME)
     theme.update(settings.get("theme") or {})
     settings["theme"] = theme
+    branding = dict(DEFAULT_BRANDING)
+    branding.update(settings.get("branding") or {})
+    settings["branding"] = branding
     return settings
 
 
@@ -543,7 +568,13 @@ def health():
 @app.get("/api/settings")
 def get_settings():
     settings = normalize_settings()
-    return jsonify({**settings, **registry.summary(), "theme_presets": THEME_PRESETS})
+    branding = dict(settings["branding"])
+    branding["logo_url"] = (
+        f"/api/branding/logo?v={quote(branding.get('logo_version') or branding['logo_filename'])}"
+        if branding.get("logo_filename")
+        else ""
+    )
+    return jsonify({**settings, "branding": branding, **registry.summary(), "theme_presets": THEME_PRESETS})
 
 
 @app.post("/api/settings/theme")
@@ -575,6 +606,86 @@ def reset_theme():
     settings["theme"] = dict(DEFAULT_THEME)
     settings_store.write(settings)
     return jsonify({"ok": True, "theme": settings["theme"]})
+
+
+def _branding_response(settings: dict) -> dict:
+    branding = dict(settings["branding"])
+    branding["logo_url"] = (
+        f"/api/branding/logo?v={quote(branding.get('logo_version') or branding['logo_filename'])}"
+        if branding.get("logo_filename")
+        else ""
+    )
+    return branding
+
+
+@app.post("/api/settings/branding")
+def save_branding():
+    payload = request.get_json(force=True) or {}
+    settings = normalize_settings()
+    branding = dict(settings["branding"])
+    if "initials" in payload:
+        branding["initials"] = (payload.get("initials") or "").strip()[:4] or DEFAULT_BRANDING["initials"]
+    if "kicker" in payload:
+        branding["kicker"] = (payload.get("kicker") or "").strip()
+    if "title" in payload:
+        branding["title"] = (payload.get("title") or "").strip()
+    if "sub" in payload:
+        branding["sub"] = (payload.get("sub") or "").strip()
+    if not branding["title"]:
+        return jsonify({"error": "Organization name is required."}), 400
+    settings["branding"] = branding
+    settings_store.write(settings)
+    return jsonify({"ok": True, "branding": _branding_response(settings)})
+
+
+@app.post("/api/settings/branding/logo")
+def upload_logo():
+    uploaded = request.files.get("file")
+    if not uploaded or not uploaded.filename:
+        return jsonify({"error": "Choose an image file to upload."}), 400
+    suffix = Path(secure_filename(uploaded.filename)).suffix.lower()
+    if suffix not in LOGO_ALLOWED_EXTENSIONS:
+        return jsonify({"error": "Logo must be a PNG, JPG, WEBP, or SVG image."}), 400
+    uploaded.seek(0, os.SEEK_END)
+    size = uploaded.tell()
+    uploaded.seek(0)
+    if size > LOGO_MAX_BYTES:
+        return jsonify({"error": "Logo image must be 3 MB or smaller."}), 400
+
+    BRANDING_DIR.mkdir(parents=True, exist_ok=True)
+    # Remove any previously uploaded logo (possibly a different extension) before saving the new one.
+    for existing in BRANDING_DIR.glob("logo.*"):
+        existing.unlink(missing_ok=True)
+    dest = BRANDING_DIR / f"logo{suffix}"
+    uploaded.save(dest)
+
+    settings = normalize_settings()
+    settings["branding"]["logo_filename"] = dest.name
+    settings["branding"]["logo_version"] = uuid.uuid4().hex
+    settings_store.write(settings)
+    return jsonify({"ok": True, "branding": _branding_response(settings)})
+
+
+@app.post("/api/settings/branding/logo/reset")
+def reset_logo():
+    settings = normalize_settings()
+    if BRANDING_DIR.exists():
+        for existing in BRANDING_DIR.glob("logo.*"):
+            existing.unlink(missing_ok=True)
+    settings["branding"]["logo_filename"] = ""
+    settings["branding"]["logo_version"] = ""
+    settings_store.write(settings)
+    return jsonify({"ok": True, "branding": _branding_response(settings)})
+
+
+@app.get("/api/branding/logo")
+def get_logo():
+    settings = normalize_settings()
+    filename = settings["branding"].get("logo_filename")
+    if not filename or not (BRANDING_DIR / filename).exists():
+        return jsonify({"error": "No logo uploaded."}), 404
+    suffix = Path(filename).suffix.lower()
+    return send_from_directory(BRANDING_DIR, filename, mimetype=LOGO_MIME_TYPES.get(suffix))
 
 
 @app.post("/api/settings/reload")
@@ -1060,6 +1171,9 @@ def export_backup():
             path = Path(path_value) if path_value else None
             if path and path.exists():
                 archive.write(path, label)
+        logo_filename = normalize_settings(settings)["branding"].get("logo_filename")
+        if logo_filename and (BRANDING_DIR / logo_filename).exists():
+            archive.write(BRANDING_DIR / logo_filename, f"branding/{logo_filename}")
     buffer.seek(0)
     stamp = datetime.now().strftime("%Y%m%d")
     return send_file(
@@ -1123,6 +1237,13 @@ def import_backup():
             shutil.copyfile(assessors_src, DEFAULT_PROVINCE_ASSESSORS)
         if region_src:
             shutil.copyfile(region_src, DEFAULT_REGION_ASSESSORS)
+        for logo_candidate in extract_dir.rglob("branding/logo.*"):
+            BRANDING_DIR.mkdir(parents=True, exist_ok=True)
+            for existing in BRANDING_DIR.glob("logo.*"):
+                existing.unlink(missing_ok=True)
+            shutil.copyfile(logo_candidate, BRANDING_DIR / logo_candidate.name)
+            break
+
         imported_settings = {}
         settings_file = _find_backup_file(extract_dir, "settings.json")
         if settings_file:
@@ -1137,6 +1258,7 @@ def import_backup():
                 "assessors_path": str(DEFAULT_PROVINCE_ASSESSORS),
                 "region_assessors_path": str(DEFAULT_REGION_ASSESSORS),
                 "theme": (imported_settings or {}).get("theme") or dict(DEFAULT_THEME),
+                "branding": (imported_settings or {}).get("branding") or dict(DEFAULT_BRANDING),
             }
         )
         settings_store.write(merged)

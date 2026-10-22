@@ -61,6 +61,11 @@ body {
   color: var(--gold);
 }
 .brand-sub { color: var(--muted); letter-spacing: 0.06em; margin-top: 2px; }
+.brand-mark.has-image { background: var(--input-bg); overflow: hidden; }
+.brand-mark img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
+
+.branding-preview { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.branding-preview .brand-mark { width: 64px; height: 64px; font-size: 1.1rem; }
 
 .nav { display: flex; flex-direction: column; gap: 6px; }
 .nav button, .ghost, .primary, .danger, .linkish {
@@ -546,6 +551,9 @@ th { color: var(--gold); font-weight: 500; font-size: 0.75rem; letter-spacing: 0
 .event-block.event-done h3 { text-decoration: line-through; text-decoration-color: var(--muted); }
 
 .finder-list { display: flex; flex-direction: column; gap: 10px; }
+.finder-assessor-card { padding: 12px; border: 1px solid var(--line); border-radius: 12px; margin-bottom: 10px; }
+.finder-assessor-card:last-child { margin-bottom: 0; }
+.finder-assessor-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .pick {
   border: 1px solid var(--line);
   background: var(--input-bg);

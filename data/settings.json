@@ -10,5 +10,13 @@
     "background": "#020617",
     "text": "#f8fafc",
     "highlight": "#fbbf24"
+  },
+  "branding": {
+    "initials": "TL",
+    "kicker": "TESDA Region VIII",
+    "title": "Southern Leyte",
+    "sub": "Competency Assessment Control",
+    "logo_filename": "logo.svg",
+    "logo_version": "c487f2ce166e4181b2d21e15aec102ab"
   }
 }

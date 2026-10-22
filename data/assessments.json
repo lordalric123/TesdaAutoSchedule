@@ -5141,6 +5141,7 @@
     "assessor": "Mabelle D. Cebreros",
     "assessor_type": "region",
     "tesda_representative": "",
+    "remarks": "WLC Students/Regular",
     "assessment_dates": [
       "2026-10-28",
       "2026-10-29",
@@ -5149,29 +5150,35 @@
     "approved_dates": [
       {
         "assessment_date": "2026-10-28",
-        "date": "2026-10-26"
+        "date": "2026-10-26",
+        "manual": false
       },
       {
         "assessment_date": "2026-10-29",
-        "date": "2026-10-27"
+        "date": "2026-10-27",
+        "manual": false
       },
       {
         "assessment_date": "2026-10-30",
-        "date": "2026-10-28"
+        "date": "2026-10-28",
+        "manual": false
       }
     ],
     "schedule_reminder_dates": [
       {
         "assessment_date": "2026-10-28",
-        "date": "2026-10-26"
+        "date": "2026-10-26",
+        "manual": false
       },
       {
         "assessment_date": "2026-10-29",
-        "date": "2026-10-27"
+        "date": "2026-10-27",
+        "manual": false
       },
       {
         "assessment_date": "2026-10-30",
-        "date": "2026-10-28"
+        "date": "2026-10-28",
+        "manual": false
       }
     ],
     "results_reminder_dates": [
@@ -5189,7 +5196,7 @@
       }
     ],
     "created_at": "2026-10-20T17:19:17",
-    "updated_at": "2026-10-20T17:19:17"
+    "updated_at": "2026-10-22T09:05:45"
   },
   {
     "id": "d43dab8a-3eea-4e20-962c-df737bc22e91",
@@ -28572,5 +28579,242 @@
     ],
     "created_at": "2026-10-21T15:45:00",
     "updated_at": "2026-10-21T15:45:00"
+  },
+  {
+    "id": "186c960a-f43b-4ecb-888e-ea1653e46738",
+    "assessment_center": "GHRACE JHOY TECHNICAL AND VOCATIONAL SCHOOL, INC.",
+    "qualification": "Events Management Services NC III",
+    "duration_type": "continuous",
+    "start_date": "2026-10-28",
+    "end_date": "2026-10-30",
+    "pax": 29,
+    "assessors": [
+      {
+        "name": "Lerma Caña Parado",
+        "assessor_type": "province"
+      }
+    ],
+    "assessor": "Lerma Caña Parado",
+    "assessor_type": "province",
+    "tesda_representative": "",
+    "remarks": "FARMFINITY Scholars",
+    "assessment_dates": [
+      "2026-10-28",
+      "2026-10-29",
+      "2026-10-30"
+    ],
+    "approved_dates": [
+      {
+        "assessment_date": "2026-10-28",
+        "date": "2026-10-26",
+        "manual": false
+      },
+      {
+        "assessment_date": "2026-10-29",
+        "date": "2026-10-27",
+        "manual": false
+      },
+      {
+        "assessment_date": "2026-10-30",
+        "date": "2026-10-28",
+        "manual": false
+      }
+    ],
+    "schedule_reminder_dates": [
+      {
+        "assessment_date": "2026-10-28",
+        "date": "2026-10-26",
+        "manual": false
+      },
+      {
+        "assessment_date": "2026-10-29",
+        "date": "2026-10-27",
+        "manual": false
+      },
+      {
+        "assessment_date": "2026-10-30",
+        "date": "2026-10-28",
+        "manual": false
+      }
+    ],
+    "results_reminder_dates": [
+      {
+        "assessment_date": "2026-10-28",
+        "date": "2026-10-29"
+      },
+      {
+        "assessment_date": "2026-10-29",
+        "date": "2026-10-30"
+      },
+      {
+        "assessment_date": "2026-10-30",
+        "date": "2026-10-31"
+      }
+    ],
+    "created_at": "2026-10-22T09:05:01",
+    "updated_at": "2026-10-22T09:05:01"
+  },
+  {
+    "id": "d025ee5a-dde8-4c74-8af4-6f6a58c5cd1b",
+    "assessment_center": "GHRACE JHOY TECHNICAL AND VOCATIONAL SCHOOL, INC.",
+    "qualification": "Housekeeping NC III",
+    "duration_type": "continuous",
+    "start_date": "2026-10-26",
+    "end_date": "2026-10-29",
+    "pax": 36,
+    "assessors": [
+      {
+        "name": "Emerita M. Altes",
+        "assessor_type": "region"
+      }
+    ],
+    "assessor": "Emerita M. Altes",
+    "assessor_type": "region",
+    "tesda_representative": "S. Yuzon",
+    "remarks": "WLC Students/Regular",
+    "assessment_dates": [
+      "2026-10-26",
+      "2026-10-27",
+      "2026-10-28",
+      "2026-10-29"
+    ],
+    "approved_dates": [
+      {
+        "assessment_date": "2026-10-26",
+        "date": "2026-10-22",
+        "manual": false
+      },
+      {
+        "assessment_date": "2026-10-27",
+        "date": "2026-10-23",
+        "manual": false
+      },
+      {
+        "assessment_date": "2026-10-28",
+        "date": "2026-10-26",
+        "manual": false
+      },
+      {
+        "assessment_date": "2026-10-29",
+        "date": "2026-10-27",
+        "manual": false
+      }
+    ],
+    "schedule_reminder_dates": [
+      {
+        "assessment_date": "2026-10-26",
+        "date": "2026-10-22",
+        "manual": false
+      },
+      {
+        "assessment_date": "2026-10-27",
+        "date": "2026-10-23",
+        "manual": false
+      },
+      {
+        "assessment_date": "2026-10-28",
+        "date": "2026-10-26",
+        "manual": false
+      },
+      {
+        "assessment_date": "2026-10-29",
+        "date": "2026-10-27",
+        "manual": false
+      }
+    ],
+    "results_reminder_dates": [
+      {
+        "assessment_date": "2026-10-26",
+        "date": "2026-10-27"
+      },
+      {
+        "assessment_date": "2026-10-27",
+        "date": "2026-10-28"
+      },
+      {
+        "assessment_date": "2026-10-28",
+        "date": "2026-10-29"
+      },
+      {
+        "assessment_date": "2026-10-29",
+        "date": "2026-10-30"
+      }
+    ],
+    "created_at": "2026-10-22T10:35:22",
+    "updated_at": "2026-10-22T10:35:22"
+  },
+  {
+    "id": "b4825c19-09e3-4239-bbfd-6ce28a032ef9",
+    "assessment_center": "GHRACE JHOY TECHNICAL AND VOCATIONAL SCHOOL, INC.",
+    "qualification": "Bread and Pastry Production NC II",
+    "duration_type": "continuous",
+    "start_date": "2026-10-28",
+    "end_date": "2026-10-30",
+    "pax": 24,
+    "assessors": [
+      {
+        "name": "Brenda Napuli Balogo",
+        "assessor_type": "province"
+      }
+    ],
+    "assessor": "Brenda Napuli Balogo",
+    "assessor_type": "province",
+    "tesda_representative": "Josue",
+    "remarks": "FARMFINITY/EBET",
+    "assessment_dates": [
+      "2026-10-28",
+      "2026-10-29",
+      "2026-10-30"
+    ],
+    "approved_dates": [
+      {
+        "assessment_date": "2026-10-28",
+        "date": "2026-10-26",
+        "manual": false
+      },
+      {
+        "assessment_date": "2026-10-29",
+        "date": "2026-10-27",
+        "manual": false
+      },
+      {
+        "assessment_date": "2026-10-30",
+        "date": "2026-10-28",
+        "manual": false
+      }
+    ],
+    "schedule_reminder_dates": [
+      {
+        "assessment_date": "2026-10-28",
+        "date": "2026-10-26",
+        "manual": false
+      },
+      {
+        "assessment_date": "2026-10-29",
+        "date": "2026-10-27",
+        "manual": false
+      },
+      {
+        "assessment_date": "2026-10-30",
+        "date": "2026-10-28",
+        "manual": false
+      }
+    ],
+    "results_reminder_dates": [
+      {
+        "assessment_date": "2026-10-28",
+        "date": "2026-10-29"
+      },
+      {
+        "assessment_date": "2026-10-29",
+        "date": "2026-10-30"
+      },
+      {
+        "assessment_date": "2026-10-30",
+        "date": "2026-10-31"
+      }
+    ],
+    "created_at": "2026-10-22T18:02:52",
+    "updated_at": "2026-10-22T18:02:52"
   }
 ]
