@@ -245,6 +245,7 @@ body {
   border-radius: 12px;
   background: var(--input-bg);
 }
+.duration-toggle.duration-toggle-3 { grid-template-columns: 1fr 1fr 1fr; }
 .duration-toggle input { position: absolute; opacity: 0; pointer-events: none; }
 .duration-toggle label {
   margin: 0;
@@ -314,6 +315,43 @@ body {
 }
 #add-assessor {
   margin-top: 4px;
+  align-self: flex-start;
+  font-size: 0.85rem;
+  padding: 8px 12px;
+}
+
+.multi-date-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.multi-date-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--input-bg);
+}
+.multi-date-row .assessor-num {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(94, 234, 212, 0.12);
+  color: var(--cyan-2);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.72rem;
+  flex-shrink: 0;
+}
+.multi-date-row input[type="date"] { background: var(--bg-2); flex: 1; min-width: 0; }
+.multi-date-row .multi-date-remove {
+  white-space: nowrap;
+  padding: 8px 10px;
+  font-size: 0.8rem;
+  border-radius: 9px;
+}
+.multi-date-row .multi-date-remove:disabled { opacity: 0.3; cursor: not-allowed; }
+#add-multi-date {
+  margin-top: 0;
   align-self: flex-start;
   font-size: 0.85rem;
   padding: 8px 12px;

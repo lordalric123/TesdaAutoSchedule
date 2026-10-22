@@ -6,7 +6,7 @@ from datetime import date, timedelta
 from typing import Literal
 
 
-DurationType = Literal["single", "continuous"]
+DurationType = Literal["single", "multiple", "continuous"]
 
 
 def parse_iso_date(value: str) -> date:
@@ -55,10 +55,21 @@ def calculate_derived_dates(
     start: date,
     end: date,
     duration_type: DurationType,
+    explicit_dates: list[date] | None = None,
 ) -> dict:
     if duration_type == "single":
         end = start
-    assessment_dates = daterange(start, end)
+        assessment_dates = [start]
+    elif duration_type == "multiple":
+        # Non-continuous schedule: the caller supplies the exact assessment dates
+        # (e.g. 28, 30, 31 — skipping 29), rather than a filled start..end range.
+        if not explicit_dates:
+            raise ValueError("Select at least one assessment date for a multiple-day assessment.")
+        assessment_dates = sorted(set(explicit_dates))
+        start = assessment_dates[0]
+        end = assessment_dates[-1]
+    else:  # continuous
+        assessment_dates = daterange(start, end)
     schedule_pairs = [
         {
             "assessment_date": d.isoformat(),

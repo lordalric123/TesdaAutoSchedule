@@ -100,7 +100,9 @@ function escapeHtml(value) {
 }
 
 function durationLabel(type) {
-  return type === "continuous" ? "Continuous / Multiple Days" : "Single Day";
+  if (type === "continuous") return "Continuous";
+  if (type === "multiple") return "Multiple Days (Non-Continuous)";
+  return "Single Day";
 }
 
 function optionList(values, selected = "") {
@@ -311,11 +313,16 @@ function assessmentDateRange(startIso, endIso) {
   }
   return dates;
 }
-function calculatedApprovedDates(startIso, endIso, durationType) {
-  if (!startIso) return [];
-  const assessmentDates = durationType === "continuous" && endIso
-    ? assessmentDateRange(startIso, endIso)
-    : [startIso];
+function calculatedApprovedDates(startIso, endIso, durationType, explicitDates) {
+  let assessmentDates;
+  if (durationType === "multiple") {
+    assessmentDates = (explicitDates || []).filter(Boolean).slice().sort();
+  } else if (durationType === "continuous" && endIso) {
+    assessmentDates = startIso ? assessmentDateRange(startIso, endIso) : [];
+  } else {
+    assessmentDates = startIso ? [startIso] : [];
+  }
+  if (!assessmentDates.length) return [];
   return assessmentDates.map((iso) => ({
     assessment_date: iso,
     date: toISODate(scheduleReminderDate(parseLocalDate(iso))),
@@ -333,10 +340,10 @@ async function renderScheduler(extra) {
   const current = editing || {
     assessment_center: prefill.assessment_center || "",
     qualification: prefill.qualification || "",
-    duration_type: "single",
-    start_date: "",
-    end_date: "",
-    pax: "",
+    duration_type: prefill.duration_type || "continuous",
+    start_date: prefill.start_date || "",
+    end_date: prefill.end_date || "",
+    pax: prefill.pax || "",
     tesda_representative: prefill.tesda_representative || "",
     remarks: prefill.remarks || "",
   };
@@ -462,16 +469,65 @@ async function renderScheduler(extra) {
     });
   }
 
+  // Non-continuous assessment dates (duration type "multiple"): an explicit, hand-picked
+  // list of individual dates, e.g. 28, 30, 31 while skipping 29.
+  let multiDates;
+  if (prefill.assessment_dates && prefill.assessment_dates.length && prefill.duration_type === "multiple") {
+    multiDates = prefill.assessment_dates.slice();
+  } else if (editing && editing.duration_type === "multiple" && editing.assessment_dates && editing.assessment_dates.length) {
+    multiDates = editing.assessment_dates.slice();
+  } else {
+    multiDates = [current.start_date || ""];
+  }
+
+  function multiDateRowsHtml() {
+    return `<div class="multi-date-list">${multiDates.map((d, index) => `
+      <div class="multi-date-row">
+        <span class="assessor-num">${index + 1}</span>
+        <input type="date" class="multi-date-input" data-index="${index}" value="${d || ""}" />
+        <button type="button" class="ghost multi-date-remove" data-index="${index}" ${multiDates.length <= 1 ? "disabled" : ""}>Remove</button>
+      </div>
+    `).join("")}</div>`;
+  }
+
+  function redrawMultiDateRows() {
+    $("multi-date-rows").innerHTML = multiDateRowsHtml();
+    bindMultiDateRowEvents();
+  }
+
+  function bindMultiDateRowEvents() {
+    document.querySelectorAll(".multi-date-input").forEach((input) => {
+      input.addEventListener("change", () => {
+        const idx = Number(input.dataset.index);
+        multiDates[idx] = input.value;
+        recomputeApprovedRows();
+        redrawApprovedRows();
+      });
+    });
+    document.querySelectorAll(".multi-date-remove").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const idx = Number(btn.dataset.index);
+        if (multiDates.length <= 1) return;
+        multiDates.splice(idx, 1);
+        redrawMultiDateRows();
+        recomputeApprovedRows();
+        redrawApprovedRows();
+      });
+    });
+  }
+
   // Approved (portal schedule) dates: auto-calculated from the assessment date(s), but each
   // one can optionally be edited by hand — e.g. the portal actually opened a different date.
   function currentFormDates() {
     const startInput = document.querySelector('input[name="start_date"]');
     const endInput = document.querySelector('input[name="end_date"]');
     const durationInput = document.querySelector('input[name="duration_type"]:checked');
+    const durationType = durationInput ? durationInput.value : current.duration_type;
     return {
       start: startInput ? startInput.value : current.start_date,
       end: endInput ? endInput.value : current.end_date,
-      durationType: durationInput ? durationInput.value : current.duration_type,
+      durationType,
+      multiDates: durationType === "multiple" ? multiDates.filter(Boolean) : [],
     };
   }
 
@@ -485,12 +541,12 @@ async function renderScheduler(extra) {
       manual: Boolean(row.manual),
     }));
   } else {
-    approvedRows = calculatedApprovedDates(current.start_date, current.end_date, current.duration_type).map((row) => ({ ...row, manual: false }));
+    approvedRows = calculatedApprovedDates(current.start_date, current.end_date, current.duration_type, multiDates).map((row) => ({ ...row, manual: false }));
   }
 
   function recomputeApprovedRows() {
-    const { start, end, durationType } = currentFormDates();
-    const autoRows = calculatedApprovedDates(start, end, durationType);
+    const { start, end, durationType, multiDates: md } = currentFormDates();
+    const autoRows = calculatedApprovedDates(start, end, durationType, md);
     approvedRows = autoRows.map((auto) => {
       const prev = approvedRows.find((row) => row.assessment_date === auto.assessment_date);
       if (prev && prev.manual) return { ...auto, date: prev.date, manual: true };
@@ -522,8 +578,8 @@ async function renderScheduler(extra) {
     document.querySelectorAll(".approved-date-input").forEach((input) => {
       input.addEventListener("change", () => {
         const idx = Number(input.dataset.index);
-        const { start, end, durationType } = currentFormDates();
-        const auto = calculatedApprovedDates(start, end, durationType)[idx];
+        const { start, end, durationType, multiDates: md } = currentFormDates();
+        const auto = calculatedApprovedDates(start, end, durationType, md)[idx];
         approvedRows[idx] = { ...approvedRows[idx], date: input.value, manual: !auto || input.value !== auto.date };
         redrawApprovedRows();
       });
@@ -531,8 +587,8 @@ async function renderScheduler(extra) {
     document.querySelectorAll(".approved-date-reset").forEach((btn) => {
       btn.addEventListener("click", () => {
         const idx = Number(btn.dataset.index);
-        const { start, end, durationType } = currentFormDates();
-        const auto = calculatedApprovedDates(start, end, durationType)[idx];
+        const { start, end, durationType, multiDates: md } = currentFormDates();
+        const auto = calculatedApprovedDates(start, end, durationType, md)[idx];
         if (auto) approvedRows[idx] = { ...auto, manual: false };
         redrawApprovedRows();
       });
@@ -581,24 +637,32 @@ async function renderScheduler(extra) {
           <p class="sched-section-label field full">Schedule</p>
           <div class="field full">
             <label>Assessment Duration</label>
-            <div class="duration-toggle">
+            <div class="duration-toggle duration-toggle-3">
               <input type="radio" id="duration-single" name="duration_type" value="single" ${current.duration_type === "single" ? "checked" : ""} />
               <label for="duration-single">Single Day</label>
+              <input type="radio" id="duration-multiple" name="duration_type" value="multiple" ${current.duration_type === "multiple" ? "checked" : ""} />
+              <label for="duration-multiple">Multiple (Skip Days)</label>
               <input type="radio" id="duration-continuous" name="duration_type" value="continuous" ${current.duration_type === "continuous" ? "checked" : ""} />
-              <label for="duration-continuous">Continuous / Multiple Days</label>
+              <label for="duration-continuous">Continuous</label>
             </div>
           </div>
           <div class="field">
             <label>Number of Pax</label>
             <input type="number" min="1" name="pax" value="${escapeHtml(current.pax)}" required />
           </div>
-          <div class="field">
+          <div class="field" id="start-wrap" style="${current.duration_type === "multiple" ? "display:none" : ""}">
             <label id="start-label">${current.duration_type === "continuous" ? "Start Date" : "Assessment Date"}</label>
-            <input type="date" name="start_date" value="${current.start_date || ""}" required />
+            <input type="date" name="start_date" value="${current.start_date || ""}" ${current.duration_type === "multiple" ? "" : "required"} />
           </div>
           <div class="field" id="end-wrap" style="${current.duration_type === "continuous" ? "" : "display:none"}">
             <label>End Date</label>
             <input type="date" name="end_date" value="${current.end_date || ""}" />
+          </div>
+          <div class="field full" id="multi-dates-wrap" style="${current.duration_type === "multiple" ? "" : "display:none"}">
+            <label>Assessment Dates</label>
+            <div id="multi-date-rows">${multiDateRowsHtml()}</div>
+            <button type="button" class="ghost" id="add-multi-date">+ Add date</button>
+            <p class="hint">Pick each day individually for a non-continuous schedule — e.g. 28, 30, 31, skipping 29.</p>
           </div>
           <div class="field full">
             <label>Approved / Portal Schedule Date${approvedRows.length === 1 ? "" : "(s)"}</label>
@@ -661,6 +725,13 @@ async function renderScheduler(extra) {
     redrawAssessorRows();
   });
   bindApprovedRowEvents();
+  bindMultiDateRowEvents();
+  $("add-multi-date").addEventListener("click", () => {
+    multiDates.push("");
+    redrawMultiDateRows();
+    recomputeApprovedRows();
+    redrawApprovedRows();
+  });
 
   function refreshSchedulerRecords() {
     const filtered = filterAssessments(state.assessments, state.schedulerSearch);
@@ -685,12 +756,21 @@ async function renderScheduler(extra) {
 
   const form = $("assessment-form");
   const endWrap = $("end-wrap");
+  const startWrap = $("start-wrap");
+  const multiDatesWrap = $("multi-dates-wrap");
   form.querySelectorAll('input[name="duration_type"]').forEach((input) => {
     input.addEventListener("change", () => {
-      const continuous = input.value === "continuous" && input.checked;
       if (!input.checked) return;
-      endWrap.style.display = continuous ? "" : "none";
-      $("start-label").textContent = continuous ? "Start Date" : "Assessment Date";
+      const type = input.value;
+      endWrap.style.display = type === "continuous" ? "" : "none";
+      multiDatesWrap.style.display = type === "multiple" ? "" : "none";
+      startWrap.style.display = type === "multiple" ? "none" : "";
+      if (type === "multiple") {
+        form.start_date.removeAttribute("required");
+      } else {
+        form.start_date.setAttribute("required", "required");
+      }
+      $("start-label").textContent = type === "continuous" ? "Start Date" : "Assessment Date";
       recomputeApprovedRows();
       redrawApprovedRows();
     });
@@ -704,12 +784,12 @@ async function renderScheduler(extra) {
     redrawApprovedRows();
   });
   form.assessment_center.addEventListener("change", async () => {
-    state.prefill = { ...formValues(form), assessors: assessorRows.slice(), approved_dates: approvedRows.slice() };
+    state.prefill = { ...formValues(form), assessors: assessorRows.slice(), approved_dates: approvedRows.slice(), assessment_dates: multiDates.slice() };
     state.prefill.qualification = "";
     await renderScheduler({ prefill: state.prefill, assessment: editing });
   });
   form.qualification.addEventListener("change", async () => {
-    state.prefill = { ...formValues(form), assessors: assessorRows.slice(), approved_dates: approvedRows.slice() };
+    state.prefill = { ...formValues(form), assessors: assessorRows.slice(), approved_dates: approvedRows.slice(), assessment_dates: multiDates.slice() };
     await renderScheduler({ prefill: state.prefill, assessment: editing });
   });
   form.addEventListener("submit", async (event) => {
@@ -717,6 +797,16 @@ async function renderScheduler(extra) {
     const payload = formValues(form);
     payload.pax = Number(payload.pax);
     if (payload.duration_type === "single") payload.end_date = payload.start_date;
+    if (payload.duration_type === "multiple") {
+      const dates = multiDates.filter(Boolean);
+      if (!dates.length) {
+        toast("Add at least one assessment date.", "error");
+        return;
+      }
+      payload.assessment_dates = dates;
+      payload.start_date = dates.slice().sort()[0];
+      payload.end_date = dates.slice().sort().slice(-1)[0];
+    }
     payload.assessors = assessorRows
       .filter((row) => row.assessor)
       .map((row) => ({ name: row.assessor, assessor_type: row.assessor_type }));

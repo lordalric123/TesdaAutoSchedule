@@ -206,6 +206,20 @@ def format_range(start: str, end: str) -> str:
     return f"{start_d.strftime('%B %d, %Y')}–{end_d.strftime('%B %d, %Y')}"
 
 
+def format_multi_dates(dates: list[str]) -> str:
+    """Label for a non-continuous ('multiple') schedule, e.g. Oct 28, 30, 31, 2026."""
+    parsed = [parse_iso_date(d) for d in dates]
+    if not parsed:
+        return ""
+    if len(parsed) == 1:
+        return parsed[0].strftime("%B %d, %Y")
+    same_month_year = all(d.year == parsed[0].year and d.month == parsed[0].month for d in parsed)
+    if same_month_year:
+        days = ", ".join(str(d.day) for d in parsed)
+        return f"{parsed[0].strftime('%B')} {days}, {parsed[0].year}"
+    return ", ".join(d.strftime("%b %d, %Y") for d in parsed)
+
+
 def normalize_assessors(payload: dict, existing: dict | None = None) -> list[dict]:
     """Build the assessors list from a payload, tolerating the old single-assessor shape."""
     raw = payload.get("assessors")
@@ -256,7 +270,11 @@ def decorate(assessment: dict) -> dict:
         for a in item["assessors"]
     )
     item.setdefault("remarks", "")
-    item["date_label"] = format_range(item["start_date"], item["end_date"])
+    item["date_label"] = (
+        format_multi_dates(item.get("assessment_dates") or [])
+        if item.get("duration_type") == "multiple"
+        else format_range(item["start_date"], item["end_date"])
+    )
     item["approved_date_list"] = unique_dates(item["approved_dates"])
     item["schedule_reminder_list"] = unique_dates(item["schedule_reminder_dates"])
     item["results_reminder_list"] = unique_dates(item["results_reminder_dates"])
@@ -266,13 +284,22 @@ def decorate(assessment: dict) -> dict:
 def build_assessment(payload: dict, existing: dict | None = None) -> dict:
     center = (payload.get("assessment_center") or "").strip()
     qualification = (payload.get("qualification") or "").strip()
-    duration_type = payload.get("duration_type") or "single"
-    if duration_type not in {"single", "continuous"}:
-        raise ValueError("Assessment duration must be single or continuous.")
-    start = parse_iso_date(payload["start_date"])
-    end = parse_iso_date(payload.get("end_date") or payload["start_date"])
-    if duration_type == "single":
-        end = start
+    duration_type = payload.get("duration_type") or "continuous"
+    if duration_type not in {"single", "multiple", "continuous"}:
+        raise ValueError("Assessment duration must be single, multiple, or continuous.")
+    explicit_dates = None
+    if duration_type == "multiple":
+        raw_dates = payload.get("assessment_dates") or []
+        explicit_dates = sorted({parse_iso_date(d) for d in raw_dates if d})
+        if not explicit_dates:
+            raise ValueError("Select at least one assessment date for a multiple-day assessment.")
+        start = explicit_dates[0]
+        end = explicit_dates[-1]
+    else:
+        start = parse_iso_date(payload["start_date"])
+        end = parse_iso_date(payload.get("end_date") or payload["start_date"])
+        if duration_type == "single":
+            end = start
     pax = int(payload.get("pax") or 0)
     if pax < 1:
         raise ValueError("Number of pax must be at least 1.")
@@ -284,7 +311,7 @@ def build_assessment(payload: dict, existing: dict | None = None) -> dict:
     if not assessors:
         raise ValueError("At least one assessor is required.")
 
-    derived = calculate_derived_dates(start, end, duration_type)
+    derived = calculate_derived_dates(start, end, duration_type, explicit_dates)
     approved_dates = apply_approved_date_overrides(derived["approved_dates"], payload.get("approved_dates"))
     now = datetime.now().isoformat(timespec="seconds")
     return {
