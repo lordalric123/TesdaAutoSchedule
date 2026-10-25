@@ -234,25 +234,51 @@ def build_assessor_history_workbook(assessment_log: list[dict], assessor_type: s
 
     province_label = "REGION" if assessor_type == "region" else "PROVINCE"
 
+    # Font family/sizes matched to the official TESDA-OP-CO-05-F35 "Assignment of
+    # Assessors" form: Arial throughout, bold caps for the title and field labels,
+    # plain body text for the filled-in values.
     thin = Border(
         left=Side(style="thin", color="000000"),
         right=Side(style="thin", color="000000"),
         top=Side(style="thin", color="000000"),
         bottom=Side(style="thin", color="000000"),
     )
-    form_code_font = Font(name="Calibri", size=9)
-    title_font = Font(name="Calibri", size=16, bold=True)
-    month_font = Font(name="Calibri", size=11, italic=True)
-    label_font = Font(name="Calibri", size=10, bold=True)
-    header_font = Font(name="Calibri", size=11, bold=True)
-    body_font = Font(name="Calibri", size=11)
+    form_code_font = Font(name="Arial", size=9)
+    title_font = Font(name="Arial", size=16, bold=True)
+    month_font = Font(name="Arial", size=11)
+    label_font = Font(name="Arial", size=11, bold=True)
+    header_font = Font(name="Arial", size=11, bold=True)
+    body_font = Font(name="Arial", size=11)
     center = Alignment(horizontal="center", vertical="center", wrap_text=True)
     left = Alignment(horizontal="left", vertical="center", wrap_text=True)
     right = Alignment(horizontal="right", vertical="center")
 
     headers = ["NAME OF ASSESSOR", "ASSESSMENT CENTER", "DATE OF ASSESSMENT"]
-    widths = [38, 42, 24]
+    # Generous enough that typical names/center names fit on one line; any longer
+    # value still wraps (never gets cut off) and the row height is grown to match.
+    widths = [28, 50, 24]
     ncols = len(headers)
+    QUAL_SPACER_ROWS = 3  # blank rows of breathing room between qualification tables
+
+    def lines_needed(text, col_width: float, bold: bool = False) -> int:
+        """Approximate how many wrapped lines `text` will take at `col_width`,
+        so the row can be made tall enough that nothing gets clipped. Calibrated
+        against actual Excel/LibreOffice wrapping at 11pt Arial: roughly 0.8
+        characters fit per column-width unit (bold text runs a bit wider)."""
+        if not text:
+            return 1
+        chars_per_line = max(6, int(col_width * (0.72 if bold else 0.8)))
+        total = 0
+        for segment in str(text).split("\n"):
+            seg_len = len(segment) or 1
+            total += max(1, -(-seg_len // chars_per_line))  # ceil division
+        return max(1, total)
+
+    def autofit_row_height(
+        values: list, col_widths: list[float], per_line: float = 16, pad: float = 8, bold: bool = False
+    ) -> float:
+        lines = max(lines_needed(v, w, bold=bold) for v, w in zip(values, col_widths))
+        return max(20.0, min(lines * per_line + pad, 160.0))
 
     months: dict[tuple[int, int], list[dict]] = {}
     for item in assessment_log:
@@ -261,12 +287,16 @@ def build_assessor_history_workbook(assessment_log: list[dict], assessor_type: s
 
     def write_sheet_head(sheet, month_label: str) -> int:
         sheet.sheet_view.showGridLines = False
-        sheet.page_setup.orientation = "landscape"
+        sheet.page_setup.orientation = "portrait"
+        sheet.page_setup.paperSize = sheet.PAPERSIZE_A4
         sheet.page_setup.fitToPage = True
         sheet.page_setup.fitToWidth = 1
         sheet.page_setup.fitToHeight = 0
-        sheet.page_margins.left = 0.4
-        sheet.page_margins.right = 0.4
+        sheet.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
+        sheet.page_margins.left = 0.5
+        sheet.page_margins.right = 0.5
+        sheet.page_margins.top = 0.6
+        sheet.page_margins.bottom = 0.6
         for index, width in enumerate(widths, start=1):
             sheet.column_dimensions[get_column_letter(index)].width = width
 
@@ -334,6 +364,9 @@ def build_assessor_history_workbook(assessment_log: list[dict], assessor_type: s
                 qt_value.alignment = left
                 for col in range(2, ncols + 1):
                     sheet.cell(row, col).border = thin
+                sheet.row_dimensions[row].height = autofit_row_height(
+                    [qualification], [sum(widths[1:])]
+                )
                 row += 1
 
                 pr_label = sheet.cell(row, 1, province_label)
@@ -350,7 +383,7 @@ def build_assessor_history_workbook(assessment_log: list[dict], assessor_type: s
                     cell.font = header_font
                     cell.alignment = center
                     cell.border = thin
-                sheet.row_dimensions[row].height = 20
+                sheet.row_dimensions[row].height = autofit_row_height(headers, widths, bold=True)
                 row += 1
 
                 for item in entries:
@@ -363,9 +396,9 @@ def build_assessor_history_workbook(assessment_log: list[dict], assessor_type: s
                             cell.font = body_font
                             cell.alignment = center if col == 3 else left
                             cell.border = thin
-                        sheet.row_dimensions[row].height = 24
+                        sheet.row_dimensions[row].height = autofit_row_height(values, widths)
                         row += 1
-                row += 1  # spacer row between qualification tables
+                row += QUAL_SPACER_ROWS  # breathing room between qualification tables
 
     buffer = BytesIO()
     workbook.save(buffer)

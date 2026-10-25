@@ -28686,8 +28686,8 @@
       },
       {
         "assessment_date": "2026-10-27",
-        "date": "2026-10-23",
-        "manual": false
+        "date": "2026-10-25",
+        "manual": true
       },
       {
         "assessment_date": "2026-10-28",
@@ -28708,8 +28708,8 @@
       },
       {
         "assessment_date": "2026-10-27",
-        "date": "2026-10-23",
-        "manual": false
+        "date": "2026-10-25",
+        "manual": true
       },
       {
         "assessment_date": "2026-10-28",
@@ -28741,7 +28741,7 @@
       }
     ],
     "created_at": "2026-10-22T10:35:22",
-    "updated_at": "2026-10-22T10:35:22"
+    "updated_at": "2026-10-25T22:06:13"
   },
   {
     "id": "b4825c19-09e3-4239-bbfd-6ce28a032ef9",
