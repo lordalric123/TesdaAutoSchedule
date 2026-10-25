@@ -221,107 +221,151 @@ def build_monitoring_workbook_range(
     return buffer
 
 
-def build_assessor_history_workbook(assessment_log: list[dict], title: str = "Assessor History") -> BytesIO:
-    """One worksheet. One table per qualification, each listing its assessments
-    oldest-to-newest going down the page. Qualifications are ordered alphabetically.
+def build_assessor_history_workbook(assessment_log: list[dict], assessor_type: str = "") -> BytesIO:
+    """One worksheet per month, laid out like the official TESDA-OP-CO-05-F35
+    "Assignment of Assessors" form: a title block, then one QUALIFICATION TITLE /
+    PROVINCE (or REGION) table per qualification active that month, listing each
+    assessor assignment underneath. Every qualification is always included —
+    callers should not pre-filter by qualification, only by assessor type and
+    (optionally) a date range.
     """
     workbook = Workbook()
-    sheet = workbook.active
-    sheet.title = "Assessor History"[:31]
-    sheet.sheet_view.showGridLines = False
-    sheet.page_setup.orientation = "landscape"
-    sheet.page_setup.fitToPage = True
-    sheet.page_setup.fitToWidth = 1
-    sheet.page_setup.fitToHeight = 0
-    sheet.page_margins.left = 0.4
-    sheet.page_margins.right = 0.4
+    workbook.remove(workbook.active)
 
-    title_fill = PatternFill("solid", fgColor="1F4E79")
-    qual_fill = PatternFill("solid", fgColor="0F766E")
-    header_fill = PatternFill("solid", fgColor="FFC000")
-    zebra = PatternFill("solid", fgColor="FFF2CC")
+    province_label = "REGION" if assessor_type == "region" else "PROVINCE"
+
     thin = Border(
-        left=Side(style="thin", color="7F7F7F"),
-        right=Side(style="thin", color="7F7F7F"),
-        top=Side(style="thin", color="7F7F7F"),
-        bottom=Side(style="thin", color="7F7F7F"),
+        left=Side(style="thin", color="000000"),
+        right=Side(style="thin", color="000000"),
+        top=Side(style="thin", color="000000"),
+        bottom=Side(style="thin", color="000000"),
     )
-    title_font = Font(name="Calibri", size=16, bold=True, color="FFFFFF")
-    qual_font = Font(name="Calibri", size=12, bold=True, color="FFFFFF")
+    form_code_font = Font(name="Calibri", size=9)
+    title_font = Font(name="Calibri", size=16, bold=True)
+    month_font = Font(name="Calibri", size=11, italic=True)
+    label_font = Font(name="Calibri", size=10, bold=True)
     header_font = Font(name="Calibri", size=11, bold=True)
     body_font = Font(name="Calibri", size=11)
-    wrap = Alignment(wrap_text=True, vertical="center")
-    center = Alignment(wrap_text=True, vertical="center", horizontal="center")
+    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    left = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    right = Alignment(horizontal="right", vertical="center")
 
-    headers = ["Assessor(s)", "Assessment Center", "Date", "Pax", "TESDA Representative"]
-    widths = [36, 36, 18, 10, 26]
+    headers = ["NAME OF ASSESSOR", "ASSESSMENT CENTER", "DATE OF ASSESSMENT"]
+    widths = [38, 42, 24]
+    ncols = len(headers)
 
-    grouped: dict[str, list[dict]] = {}
+    months: dict[tuple[int, int], list[dict]] = {}
     for item in assessment_log:
-        grouped.setdefault(item.get("qualification") or "Unspecified Qualification", []).append(item)
-    for entries in grouped.values():
-        entries.sort(key=lambda x: x["start_date"])  # oldest -> newest, top to bottom
-    ordered_qualifications = sorted(grouped.keys(), key=str.casefold)
+        d = parse_iso_date(item["start_date"])
+        months.setdefault((d.year, d.month), []).append(item)
 
-    row = 1
-    sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=len(headers))
-    title_cell = sheet.cell(row, 1, title.upper())
-    title_cell.fill = title_fill
-    title_cell.font = title_font
-    title_cell.alignment = Alignment(horizontal="left", vertical="center")
-    sheet.row_dimensions[row].height = 28
-    row += 2
+    def write_sheet_head(sheet, month_label: str) -> int:
+        sheet.sheet_view.showGridLines = False
+        sheet.page_setup.orientation = "landscape"
+        sheet.page_setup.fitToPage = True
+        sheet.page_setup.fitToWidth = 1
+        sheet.page_setup.fitToHeight = 0
+        sheet.page_margins.left = 0.4
+        sheet.page_margins.right = 0.4
+        for index, width in enumerate(widths, start=1):
+            sheet.column_dimensions[get_column_letter(index)].width = width
 
-    if not ordered_qualifications:
+        row = 1
+        code_cell = sheet.cell(row, ncols, "TESDA-OP-CO-05-F35")
+        code_cell.font = form_code_font
+        code_cell.alignment = right
+        row += 1
+        rev_cell = sheet.cell(row, ncols, "Rev.No.00-03/08/17")
+        rev_cell.font = form_code_font
+        rev_cell.alignment = right
+        row += 1
+
+        sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=ncols)
+        title_cell = sheet.cell(row, 1, "ASSIGNMENT OF ASSESSORS")
+        title_cell.font = title_font
+        title_cell.alignment = center
+        sheet.row_dimensions[row].height = 24
+        row += 1
+
+        sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=ncols)
+        month_cell = sheet.cell(row, 1, f"For the month of {month_label}")
+        month_cell.font = month_font
+        month_cell.alignment = center
+        row += 2
+        return row
+
+    if not months:
+        sheet = workbook.create_sheet("Assessor History"[:31])
+        row = write_sheet_head(sheet, "—")
         sheet.cell(row, 1, "No recorded assessments.").font = body_font
     else:
-        for qualification in ordered_qualifications:
-            entries = grouped[qualification]
-            sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=len(headers))
-            qual_cell = sheet.cell(
-                row, 1, f"{qualification}  ({len(entries)} assessment{'s' if len(entries) != 1 else ''})"
-            )
-            qual_cell.fill = qual_fill
-            qual_cell.font = qual_font
-            qual_cell.alignment = Alignment(horizontal="left", vertical="center")
-            sheet.row_dimensions[row].height = 24
-            row += 1
+        used_names: set[str] = set()
+        for (year, month) in sorted(months.keys()):
+            month_date = date(year, month, 1)
+            month_label = month_date.strftime("%B %Y")
+            base_name = month_date.strftime("%b %Y")
+            sheet_name = base_name
+            suffix = 1
+            while sheet_name in used_names:
+                suffix += 1
+                sheet_name = f"{base_name} ({suffix})"
+            used_names.add(sheet_name)
+            sheet = workbook.create_sheet(sheet_name)
+            row = write_sheet_head(sheet, month_label)
 
-            for col, header in enumerate(headers, start=1):
-                cell = sheet.cell(row, col, header)
-                cell.fill = header_fill
-                cell.font = header_font
-                cell.alignment = center
-                cell.border = thin
-            sheet.row_dimensions[row].height = 20
-            row += 1
+            grouped: dict[str, list[dict]] = {}
+            for item in months[(year, month)]:
+                grouped.setdefault(item.get("qualification") or "Unspecified Qualification", []).append(item)
+            for entries in grouped.values():
+                entries.sort(key=lambda x: x["start_date"])
+            ordered_qualifications = sorted(grouped.keys(), key=str.casefold)
 
-            for index, item in enumerate(entries):
-                assessor_names = "; ".join(
-                    f"{a['name']} ({'Region' if a.get('assessor_type') == 'region' else 'Province'})"
-                    for a in item.get("assessors") or []
-                )
-                values = [
-                    assessor_names,
-                    item.get("assessment_center") or "",
-                    item.get("date_label") or "",
-                    item.get("pax") or "",
-                    item.get("tesda_representative") or "",
-                ]
-                fill = zebra if index % 2 else None
-                for col, value in enumerate(values, start=1):
-                    cell = sheet.cell(row, col, value)
-                    cell.font = body_font
-                    cell.alignment = center if col in {3, 4} else wrap
-                    cell.border = thin
-                    if fill:
-                        cell.fill = fill
-                sheet.row_dimensions[row].height = 30
+            for qualification in ordered_qualifications:
+                entries = grouped[qualification]
+
+                qt_label = sheet.cell(row, 1, "QUALIFICATION TITLE")
+                qt_label.font = label_font
+                qt_label.border = thin
+                qt_label.alignment = left
+                sheet.merge_cells(start_row=row, start_column=2, end_row=row, end_column=ncols)
+                qt_value = sheet.cell(row, 2, qualification)
+                qt_value.font = body_font
+                qt_value.border = thin
+                qt_value.alignment = left
+                for col in range(2, ncols + 1):
+                    sheet.cell(row, col).border = thin
                 row += 1
-            row += 1  # spacer row between qualification tables
 
-    for index, width in enumerate(widths, start=1):
-        sheet.column_dimensions[get_column_letter(index)].width = width
+                pr_label = sheet.cell(row, 1, province_label)
+                pr_label.font = label_font
+                pr_label.border = thin
+                pr_label.alignment = left
+                sheet.merge_cells(start_row=row, start_column=2, end_row=row, end_column=ncols)
+                for col in range(2, ncols + 1):
+                    sheet.cell(row, col).border = thin
+                row += 1
+
+                for col, header in enumerate(headers, start=1):
+                    cell = sheet.cell(row, col, header)
+                    cell.font = header_font
+                    cell.alignment = center
+                    cell.border = thin
+                sheet.row_dimensions[row].height = 20
+                row += 1
+
+                for item in entries:
+                    assessor_names = [a.get("name", "") for a in item.get("assessors") or [] if a.get("name")]
+                    rows_for_item = assessor_names or [""]
+                    for name in rows_for_item:
+                        values = [name, item.get("assessment_center") or "", item.get("date_label") or ""]
+                        for col, value in enumerate(values, start=1):
+                            cell = sheet.cell(row, col, value)
+                            cell.font = body_font
+                            cell.alignment = center if col == 3 else left
+                            cell.border = thin
+                        sheet.row_dimensions[row].height = 24
+                        row += 1
+                row += 1  # spacer row between qualification tables
 
     buffer = BytesIO()
     workbook.save(buffer)

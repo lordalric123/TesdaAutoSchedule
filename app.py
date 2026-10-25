@@ -1019,12 +1019,14 @@ def toggle_task():
 
 @app.get("/api/assessor-rotation/export")
 def export_assessor_history():
-    qualification = (request.args.get("qualification") or "").strip()
+    # The export always includes every qualification — the Qualification dropdown
+    # on screen only narrows what's displayed, not what gets exported. Only the
+    # assessor type (province/region/all) and the optional date range scope it.
     assessor_type = request.args.get("assessor_type") or ""
     start_date_arg = (request.args.get("start_date") or "").strip()
     end_date_arg = (request.args.get("end_date") or "").strip()
     try:
-        data = build_assessor_rotation(assessments_store.read(), registry, qualification, assessor_type)
+        data = build_assessor_rotation(assessments_store.read(), registry, "", assessor_type)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
 
@@ -1050,18 +1052,9 @@ def export_assessor_history():
 
         assessment_log = [item for item in assessment_log if in_range(item)]
 
-    title = f"Assessor History — {qualification}" if qualification else "Assessor History — All Qualifications"
-    if range_start or range_end:
-        range_label = (
-            f"{range_start.strftime('%b %d, %Y') if range_start else 'Start'} – "
-            f"{range_end.strftime('%b %d, %Y') if range_end else 'Present'}"
-        )
-        title = f"{title} ({range_label})"
-    buffer = build_assessor_history_workbook(assessment_log, title=title)
+    buffer = build_assessor_history_workbook(assessment_log, assessor_type=assessor_type)
     stamp = datetime.now().strftime("%Y%m%d")
     name_bits = ["Assessor_History"]
-    if qualification:
-        name_bits.append(qualification)
     if assessor_type:
         name_bits.append(assessor_type)
     if range_start or range_end:

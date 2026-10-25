@@ -1418,7 +1418,7 @@ async function renderHistory() {
           <button class="ghost" type="button" id="hist-export-btn">Export to Excel</button>
         </div>
       </div>
-      <p class="hint" style="margin-top:6px">Leave the dates blank to export everything, or set a range to keep the export short — both dates are inclusive.</p>
+      <p class="hint" style="margin-top:6px">Export always includes every qualification — the dropdown above only narrows what's shown on screen — for whichever assessor type tab is selected, laid out one worksheet per month in the official Assignment of Assessors form. Leave the dates blank to export full history, or set a range to narrow it — both dates are inclusive.</p>
 
       <div style="margin-top:16px">
         ${tab === "rotation" ? rotationPanel : logPanel}
@@ -1475,8 +1475,9 @@ async function renderHistory() {
       return;
     }
     const exportParams = new URLSearchParams();
-    exportParams.set("qualification", data.qualification || "");
-    exportParams.set("assessor_type", data.assessor_type || "");
+    // Export always includes every qualification, regardless of the on-screen filter —
+    // only the assessor type (province/region/all) and the optional date range apply.
+    exportParams.set("assessor_type", state.history.assessor_type || "");
     if (start) exportParams.set("start_date", start);
     if (end) exportParams.set("end_date", end);
     window.location.href = `/api/assessor-rotation/export?${exportParams.toString()}`;
