@@ -79,6 +79,29 @@ def _stringify_date(value) -> str:
     return parsed.strftime("%Y-%m-%d")
 
 
+def _raw_fields(row: pd.Series, exclude: tuple[str, ...] = ()) -> list[list[str]]:
+    """Every column from the source Excel row, verbatim and in the file's own
+    column order — so the UI can show the complete record exactly as it appears
+    in the file it originated from, not just the handful of fields this app
+    otherwise curates. Date-ish columns (anything with DATE, VALID, EXPIR, or
+    BIRTH in the header) are normalized the same way the known date fields are.
+    """
+    exclude_set = {e.upper() for e in exclude}
+    fields: list[list[str]] = []
+    for col in row.index:
+        header = str(col).strip()
+        if not header or header.upper() in exclude_set:
+            continue
+        upper = header.upper()
+        if any(hint in upper for hint in ("DATE", "VALID", "EXPIR", "BIRTH")):
+            value = _stringify_date(row.get(col))
+        else:
+            value = _stringify(row.get(col))
+        if value:
+            fields.append([header, value])
+    return fields
+
+
 def _read_excel(path: Path) -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(f"Excel file not found: {path}")
@@ -290,6 +313,7 @@ def _group_assessors(rows: list[dict], qualification: str | None = None) -> list
                 "sector": row["sector"],
                 "accreditation_number": row["accreditation_number"],
                 "valid_until": row["valid_until"],
+                "raw_fields": row["raw_fields"],
                 "qualifications": [],
             },
         )
@@ -298,6 +322,7 @@ def _group_assessors(rows: list[dict], qualification: str | None = None) -> list
         if not item["accreditation_number"] and row["accreditation_number"]:
             item["accreditation_number"] = row["accreditation_number"]
             item["valid_until"] = row["valid_until"]
+            item["raw_fields"] = row["raw_fields"]
         if not item["region"] and row["region"]:
             item["region"] = row["region"]
         if not item["province"] and row["province"]:
@@ -333,6 +358,7 @@ def _center_record(row: pd.Series) -> dict:
         "accreditation_number": _stringify(row.get("ACCREDITATION NUMBER")),
         "date_accredited": _stringify_date(row.get("DATE ACCREDITED")),
         "valid_until": _stringify_date(row.get("VALID UNTIL")),
+        "raw_fields": _raw_fields(row, exclude=("ASSESSMENT CENTER", "QUALIFICATION TITLE")),
     }
 
 
@@ -359,4 +385,5 @@ def _assessor_record(row: pd.Series, source: str) -> dict:
         "qualification_key": normalize_key(qualification),
         "accreditation_number": accreditation,
         "valid_until": _stringify_date(row.get("VALID UNTIL")),
+        "raw_fields": _raw_fields(row, exclude=("NAME", "QUALIFICATION TITLE")),
     }

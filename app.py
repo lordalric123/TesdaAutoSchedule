@@ -1025,6 +1025,7 @@ def export_assessor_history():
     assessor_type = request.args.get("assessor_type") or ""
     start_date_arg = (request.args.get("start_date") or "").strip()
     end_date_arg = (request.args.get("end_date") or "").strip()
+    group_by = "year" if (request.args.get("group_by") or "").strip().lower() == "year" else "month"
     try:
         data = build_assessor_rotation(assessments_store.read(), registry, "", assessor_type)
     except ValueError as exc:
@@ -1052,11 +1053,12 @@ def export_assessor_history():
 
         assessment_log = [item for item in assessment_log if in_range(item)]
 
-    buffer = build_assessor_history_workbook(assessment_log, assessor_type=assessor_type)
+    buffer = build_assessor_history_workbook(assessment_log, assessor_type=assessor_type, group_by=group_by)
     stamp = datetime.now().strftime("%Y%m%d")
     name_bits = ["Assessor_History"]
     if assessor_type:
         name_bits.append(assessor_type)
+    name_bits.append("by_year" if group_by == "year" else "by_month")
     if range_start or range_end:
         name_bits.append(range_start.isoformat() if range_start else "start")
         name_bits.append(range_end.isoformat() if range_end else "present")

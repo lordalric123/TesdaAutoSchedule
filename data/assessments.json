@@ -28584,9 +28584,9 @@
     "id": "186c960a-f43b-4ecb-888e-ea1653e46738",
     "assessment_center": "GHRACE JHOY TECHNICAL AND VOCATIONAL SCHOOL, INC.",
     "qualification": "Events Management Services NC III",
-    "duration_type": "continuous",
+    "duration_type": "multiple",
     "start_date": "2026-10-28",
-    "end_date": "2026-10-30",
+    "end_date": "2026-10-31",
     "pax": 29,
     "assessors": [
       {
@@ -28600,8 +28600,8 @@
     "remarks": "FARMFINITY Scholars",
     "assessment_dates": [
       "2026-10-28",
-      "2026-10-29",
-      "2026-10-30"
+      "2026-10-30",
+      "2026-10-31"
     ],
     "approved_dates": [
       {
@@ -28610,13 +28610,13 @@
         "manual": false
       },
       {
-        "assessment_date": "2026-10-29",
-        "date": "2026-10-27",
+        "assessment_date": "2026-10-30",
+        "date": "2026-10-28",
         "manual": false
       },
       {
-        "assessment_date": "2026-10-30",
-        "date": "2026-10-28",
+        "assessment_date": "2026-10-31",
+        "date": "2026-10-29",
         "manual": false
       }
     ],
@@ -28627,13 +28627,13 @@
         "manual": false
       },
       {
-        "assessment_date": "2026-10-29",
-        "date": "2026-10-27",
+        "assessment_date": "2026-10-30",
+        "date": "2026-10-28",
         "manual": false
       },
       {
-        "assessment_date": "2026-10-30",
-        "date": "2026-10-28",
+        "assessment_date": "2026-10-31",
+        "date": "2026-10-29",
         "manual": false
       }
     ],
@@ -28643,16 +28643,16 @@
         "date": "2026-10-29"
       },
       {
-        "assessment_date": "2026-10-29",
-        "date": "2026-10-30"
-      },
-      {
         "assessment_date": "2026-10-30",
         "date": "2026-10-31"
+      },
+      {
+        "assessment_date": "2026-10-31",
+        "date": "2026-11-01"
       }
     ],
     "created_at": "2026-10-22T09:05:01",
-    "updated_at": "2026-10-22T09:05:01"
+    "updated_at": "2026-10-26T15:48:46"
   },
   {
     "id": "d025ee5a-dde8-4c74-8af4-6f6a58c5cd1b",

@@ -1114,23 +1114,28 @@ function finderAssessorKey(a) {
   return `${a.assessor_type || "province"}:${a.identity_key || a.name}`;
 }
 
+function titleCaseLabel(header) {
+  return String(header || "")
+    .toLowerCase()
+    .replace(/\b([a-z])/g, (m) => m.toUpperCase())
+    .replace(/\bNo\.?\b/i, "No.");
+}
+
+function isIsoDateLike(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
+}
+
 function finderAssessorCardHtml(a, picked, expanded) {
   const assessorType = a.assessor_type || "province";
   const isPicked = picked.assessor === a.name && picked.assessor_type === assessorType;
   const key = finderAssessorKey(a);
   const isExpanded = Boolean(expanded[key]);
-  const details = [
-    ["Region", a.region],
-    ["Province", a.province],
-    ["Address", a.address],
-    ["Sex", a.sex],
-    ["Date of Birth", a.date_of_birth ? fmt(a.date_of_birth) : ""],
-    ["Present Designation", a.designation],
-    ["Company", a.company],
-    ["Sector", a.sector],
-    ["Accreditation No.", a.accreditation_number],
-    ["Valid Until", a.valid_until ? fmt(a.valid_until) : ""],
-  ].filter(([, value]) => value);
+  // Show every column exactly as it appears in the source Excel file — not just a
+  // curated subset — in the file's own column order, so nothing the sheet carries
+  // (expiry dates, a code #, or any other field) is ever left out.
+  const details = (a.raw_fields || [])
+    .map(([header, value]) => [titleCaseLabel(header), isIsoDateLike(value) ? fmt(value) : value])
+    .filter(([, value]) => value);
   const summary = [a.designation, a.company].filter(Boolean).join(" · ");
   return `
     <div class="task finder-assessor-card ${isPicked ? "task-picked" : ""}">
@@ -1410,15 +1415,8 @@ async function renderHistory() {
           <button type="button" class="tab-btn ${tab === "rotation" ? "active" : ""}" id="tab-rotation">Rotation Order</button>
           <button type="button" class="tab-btn ${tab === "log" ? "active" : ""}" id="tab-log">Assessment History</button>
         </div>
-        <div class="row-actions" style="align-items:center">
-          <span class="muted" style="font-size:0.78rem;text-transform:uppercase;letter-spacing:0.06em">From</span>
-          <input type="date" id="hist-export-start" value="${state.history.exportStart}" title="Export from this date (inclusive)" style="padding:8px 10px" />
-          <span class="muted" style="font-size:0.78rem;text-transform:uppercase;letter-spacing:0.06em">To</span>
-          <input type="date" id="hist-export-end" value="${state.history.exportEnd}" title="Export up to this date (inclusive)" style="padding:8px 10px" />
-          <button class="ghost" type="button" id="hist-export-btn">Export to Excel</button>
-        </div>
+        <button class="ghost" type="button" id="hist-export-btn">Export to Excel…</button>
       </div>
-      <p class="hint" style="margin-top:6px">Export always includes every qualification — the dropdown above only narrows what's shown on screen — for whichever assessor type tab is selected, laid out one worksheet per month in the official Assignment of Assessors form. Leave the dates blank to export full history, or set a range to narrow it — both dates are inclusive.</p>
 
       <div style="margin-top:16px">
         ${tab === "rotation" ? rotationPanel : logPanel}
@@ -1465,9 +1463,80 @@ async function renderHistory() {
     () => { state.historyLogPage -= 1; renderHistory(); },
     () => { state.historyLogPage += 1; renderHistory(); }
   );
-  $("hist-export-start").addEventListener("change", (e) => { state.history.exportStart = e.target.value; });
-  $("hist-export-end").addEventListener("change", (e) => { state.history.exportEnd = e.target.value; });
-  $("hist-export-btn").addEventListener("click", () => {
+  $("hist-export-btn").addEventListener("click", () => openExportHistoryModal());
+}
+
+function openExportHistoryModal() {
+  state.history.exportType = state.history.exportType || state.history.assessor_type || "";
+  state.history.exportStart = state.history.exportStart || "";
+  state.history.exportEnd = state.history.exportEnd || "";
+  state.history.exportGroupBy = state.history.exportGroupBy || "month";
+
+  const whatOptions = [
+    { value: "", label: "All" },
+    { value: "province", label: "Province-Based" },
+    { value: "region", label: "Region-Based" },
+  ];
+  const periodOptions = [
+    { value: "month", label: "Split by Month" },
+    { value: "year", label: "Whole Year" },
+  ];
+
+  openModal(`
+    <div class="modal-head">
+      <div>
+        <p class="eyebrow">Assessor History</p>
+        <h2>Export to Excel</h2>
+        <p class="muted">Every qualification is always included — choose what to export and, optionally, an inclusive date range.</p>
+      </div>
+      <button class="ghost" id="close-modal">Close</button>
+    </div>
+    <div class="field full">
+      <label>What</label>
+      <div class="duration-toggle duration-toggle-3" id="export-what-toggle">
+        ${whatOptions.map((opt, i) => `
+          <input type="radio" id="export-what-${i}" name="export_what" value="${opt.value}" ${state.history.exportType === opt.value ? "checked" : ""} />
+          <label for="export-what-${i}">${opt.label}</label>
+        `).join("")}
+      </div>
+    </div>
+    <div class="field full">
+      <label>Period <span class="muted" style="font-weight:400;text-transform:none;letter-spacing:0">(how sheets are split)</span></label>
+      <div class="duration-toggle" id="export-period-toggle">
+        ${periodOptions.map((opt, i) => `
+          <input type="radio" id="export-period-${i}" name="export_period" value="${opt.value}" ${state.history.exportGroupBy === opt.value ? "checked" : ""} />
+          <label for="export-period-${i}">${opt.label}</label>
+        `).join("")}
+      </div>
+      <p class="hint" style="margin-top:6px">"Split by Month" gives one sheet per month, as before. "Whole Year" gives one sheet per calendar year, listing every assignment of assessors for that year.</p>
+    </div>
+    <div class="field full">
+      <label>When <span class="muted" style="font-weight:400;text-transform:none;letter-spacing:0">(optional, inclusive)</span></label>
+      <div class="row-actions" style="align-items:center; flex-wrap:wrap; gap:10px">
+        <span class="muted" style="font-size:0.78rem;text-transform:uppercase;letter-spacing:0.06em">From</span>
+        <input type="date" id="export-start" value="${state.history.exportStart}" style="padding:8px 10px" />
+        <span class="muted" style="font-size:0.78rem;text-transform:uppercase;letter-spacing:0.06em">To</span>
+        <input type="date" id="export-end" value="${state.history.exportEnd}" style="padding:8px 10px" />
+      </div>
+      <p class="hint" style="margin-top:6px">Leave both blank to export the full history, or set a range to narrow it.</p>
+    </div>
+    <div class="field full row-actions">
+      <button class="primary" type="button" id="export-confirm">Export to Excel</button>
+      <button class="ghost" type="button" id="export-cancel">Cancel</button>
+    </div>
+  `);
+
+  $("close-modal").onclick = closeModal;
+  $("export-cancel").onclick = closeModal;
+  $("export-start").addEventListener("change", (e) => { state.history.exportStart = e.target.value; });
+  $("export-end").addEventListener("change", (e) => { state.history.exportEnd = e.target.value; });
+  document.querySelectorAll('input[name="export_what"]').forEach((input) => {
+    input.addEventListener("change", () => { if (input.checked) state.history.exportType = input.value; });
+  });
+  document.querySelectorAll('input[name="export_period"]').forEach((input) => {
+    input.addEventListener("change", () => { if (input.checked) state.history.exportGroupBy = input.value; });
+  });
+  $("export-confirm").addEventListener("click", () => {
     const start = state.history.exportStart;
     const end = state.history.exportEnd;
     if (start && end && end < start) {
@@ -1475,12 +1544,12 @@ async function renderHistory() {
       return;
     }
     const exportParams = new URLSearchParams();
-    // Export always includes every qualification, regardless of the on-screen filter —
-    // only the assessor type (province/region/all) and the optional date range apply.
-    exportParams.set("assessor_type", state.history.assessor_type || "");
+    exportParams.set("assessor_type", state.history.exportType || "");
+    exportParams.set("group_by", state.history.exportGroupBy || "month");
     if (start) exportParams.set("start_date", start);
     if (end) exportParams.set("end_date", end);
     window.location.href = `/api/assessor-rotation/export?${exportParams.toString()}`;
+    closeModal();
   });
 }
 
