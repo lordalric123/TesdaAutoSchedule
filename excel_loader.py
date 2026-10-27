@@ -32,17 +32,27 @@ def normalize_key(value) -> str:
 
 
 def identity_key(name: str, accreditation: str = "", birth: str = "", address: str = "") -> str:
-    """Identify one person without merging unrelated people who share a name."""
+    """Identify one person without merging unrelated people who share a name.
+
+    Name + birthdate (or, failing that, name + address) is preferred over the
+    accreditation number: a person's date of birth stays the same across every
+    row of theirs in the sheet, but their accreditation number does not — it's
+    assigned per qualification, so an assessor accredited for several
+    qualifications has a different number on each of their rows. Keying on
+    accreditation first would read that as several different people instead
+    of one person with several qualifications. Accreditation number is kept
+    as a fallback for when there's no birthdate or address to go on at all.
+    """
     name_key = normalize_key(name)
     acc = normalize_key(accreditation)
     dob = normalize_key(birth)
     addr = normalize_key(address)
-    if acc:
-        return f"acc:{acc}"
     if name_key and dob:
         return f"name-dob:{name_key}|{dob}"
     if name_key and addr:
         return f"name-addr:{name_key}|{addr}"
+    if acc:
+        return f"acc:{acc}"
     return f"name:{name_key}"
 
 
@@ -303,6 +313,7 @@ def _group_assessors(rows: list[dict], qualification: str | None = None) -> list
                 "display_name": row["name"],
                 "identity_key": row["identity_key"],
                 "assessor_type": row["source"],
+                "sources": [],
                 "region": row["region"],
                 "province": row["province"],
                 "address": row["address"],
@@ -315,14 +326,46 @@ def _group_assessors(rows: list[dict], qualification: str | None = None) -> list
                 "valid_until": row["valid_until"],
                 "raw_fields": row["raw_fields"],
                 "qualifications": [],
+                # One entry per (qualification, source) this person is accredited for —
+                # keyed by source as well as title, not just title, so a qualification
+                # held under both the province and region sheets keeps both accreditation
+                # records instead of the second one silently overwriting/skipping the
+                # first. Each entry has its own accreditation number / expiry, since the
+                # same assessor is often accredited on different dates/numbers per source.
+                "qualification_details": [],
             },
         )
+        # A person listed under both the province and region sheets is shown as a
+        # province-based assessor first — province always takes priority over region
+        # when both are present, regardless of which row happened to be read first.
+        if row["source"] == "province":
+            item["assessor_type"] = "province"
+        if row["source"] not in item["sources"]:
+            item["sources"].append(row["source"])
+        qual_detail_seen = {(d["qualification"], d.get("source")) for d in item["qualification_details"]}
+        if (row["qualification"], row["source"]) not in qual_detail_seen:
+            item["qualification_details"].append(
+                {
+                    "qualification": row["qualification"],
+                    "source": row["source"],
+                    "accreditation_number": row["accreditation_number"],
+                    "valid_until": row["valid_until"],
+                    "raw_fields": row["raw_fields"],
+                }
+            )
         if row["qualification"] not in item["qualifications"]:
             item["qualifications"].append(row["qualification"])
-        if not item["accreditation_number"] and row["accreditation_number"]:
+        # Same province-first priority for which record supplies the top-level
+        # accreditation/raw-field summary: take whatever's there first, but a
+        # province row always overrides a region-sourced one if that's what's
+        # currently shown, not just whichever happened to load first.
+        has_accred = bool(item["accreditation_number"])
+        shown_is_province = item.get("_accred_source") == "province"
+        if row["accreditation_number"] and (not has_accred or (row["source"] == "province" and not shown_is_province)):
             item["accreditation_number"] = row["accreditation_number"]
             item["valid_until"] = row["valid_until"]
             item["raw_fields"] = row["raw_fields"]
+            item["_accred_source"] = row["source"]
         if not item["region"] and row["region"]:
             item["region"] = row["region"]
         if not item["province"] and row["province"]:
@@ -338,6 +381,13 @@ def _group_assessors(rows: list[dict], qualification: str | None = None) -> list
             extra = item["accreditation_number"] or item["address"]
             if extra:
                 item["display_name"] = f"{item['name']} ({extra})"
+        item["qualifications"].sort(key=str.casefold)
+        # Province entries first within each qualification title, so a qualification
+        # held under both sheets lists its province accreditation before its region one.
+        item["qualification_details"].sort(
+            key=lambda d: (d["qualification"].casefold(), d.get("source") != "province")
+        )
+        item.pop("_accred_source", None)
     return sorted(grouped.values(), key=lambda x: x["display_name"].casefold())
 
 

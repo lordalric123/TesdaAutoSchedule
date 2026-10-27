@@ -5,6 +5,8 @@ const state = {
   assessments: [],
   calendar: { type: "approved", year: new Date().getFullYear(), month: new Date().getMonth() + 1, payload: null },
   finder: { query: "", selected: "", source: "province", picked: null },
+  directory: { query: "", source: "", expanded: {} },
+  dashboard: { expanded: {} },
   report: { year: new Date().getFullYear(), month: new Date().getMonth() + 1, q: "" },
   history: { qualification: "", assessor_type: "province", tab: "log" },
   schedulerPage: 1,
@@ -19,6 +21,7 @@ const titles = {
   scheduler: ["Records", "Assessment Scheduler"],
   calendar: ["Timeline", "Calendar"],
   finder: ["Lookup", "Qualification Finder"],
+  directory: ["Lookup", "Assessor Directory"],
   history: ["Rotation", "Assessor History"],
   reps: ["People", "TESDA Representatives"],
   reports: ["Exports", "Monthly Reports"],
@@ -187,6 +190,7 @@ async function render(extra) {
     if (state.view === "scheduler") await renderScheduler(extra);
     if (state.view === "calendar") await renderCalendar();
     if (state.view === "finder") await renderFinder();
+    if (state.view === "directory") await renderDirectory();
     if (state.view === "history") await renderHistory();
     if (state.view === "reps") await renderReps();
     if (state.view === "reports") await renderReports();
@@ -196,7 +200,15 @@ async function render(extra) {
   }
 }
 
-function taskChecklist(items, kind) {
+function dashboardItemKey(kind, item) {
+  return `${kind}:${item.task_id}`;
+}
+
+// Expand/collapse per dashboard row — same pattern as the Qualification Finder
+// and Assessor Directory detail toggles — so the compact list stays scannable
+// but the full assessment record (assessors, pax, rep, remarks, every reminder
+// date) is one click away instead of requiring a trip to the Scheduler.
+function taskChecklist(items, kind, expanded) {
   if (!items.length) return `<p class="empty">Nothing due in this group.</p>`;
   return items.map((item) => {
     const a = item.assessment || item;
@@ -205,18 +217,47 @@ function taskChecklist(items, kind) {
       : kind === "results"
         ? `Submit results for ${fmt(item.assessment_date)}`
         : a.date_label;
+    const key = dashboardItemKey(kind, item);
+    const isExpanded = Boolean(expanded[key]);
+    const fields = [
+      ["Dates", a.date_label],
+      ["Duration", durationLabel(a.duration_type)],
+      ["Assessors", a.assessors_label],
+      ["Number of Pax", a.pax],
+      ["TESDA Representative", a.tesda_representative],
+      ["Portal Schedule Date(s)", (a.schedule_reminder_list || []).map(fmt).join("; ")],
+      ["Results Due Date(s)", (a.results_reminder_list || []).map(fmt).join("; ")],
+      ["Remarks", a.remarks],
+    ].filter(([, value]) => value);
     return `<div class="task ${item.done ? "task-done" : ""}">
-      <label class="task-check">
-        <input type="checkbox" data-dash-task-id="${escapeHtml(item.task_id)}" ${item.done ? "checked" : ""} />
-        <b>${escapeHtml(detail)}</b>
-      </label>
+      <div class="row-actions" style="justify-content:space-between; align-items:flex-start; gap:8px; flex-wrap:nowrap">
+        <label class="task-check" style="flex:1; min-width:0">
+          <input type="checkbox" data-dash-task-id="${escapeHtml(item.task_id)}" ${item.done ? "checked" : ""} />
+          <b>${escapeHtml(detail)}</b>
+        </label>
+        ${fields.length ? `<button type="button" class="linkish dash-detail-toggle" data-dash-key="${escapeHtml(key)}">${isExpanded ? "Hide details ▴" : "Details ▾"}</button>` : ""}
+      </div>
       <span>${escapeHtml(a.assessment_center)} · ${escapeHtml(a.qualification)}</span>
+      ${isExpanded && fields.length ? `<dl class="assessment-card-grid" style="margin-top:10px">
+        ${fields.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(String(value))}</dd></div>`).join("")}
+      </dl>` : ""}
     </div>`;
   }).join("");
 }
 
 async function renderDashboard() {
   const data = await api("/api/dashboard");
+  state.dashboard.expanded = state.dashboard.expanded || {};
+  const expanded = state.dashboard.expanded;
+
+  const tasksKeys = [
+    ...data.schedule_today.map((item) => dashboardItemKey("schedule", item)),
+    ...data.results_today.map((item) => dashboardItemKey("results", item)),
+  ];
+  const assessmentsKeys = [
+    ...data.assessments_today.map((item) => dashboardItemKey("assessment", item)),
+    ...data.upcoming.map((item) => dashboardItemKey("assessment", item)),
+  ];
 
   $("view-dashboard").innerHTML = `
     <div class="grid stats">
@@ -227,19 +268,54 @@ async function renderDashboard() {
     </div>
     <div class="grid two" style="margin-top:16px">
       <div class="card">
-        <h3>Today's tasks</h3>
+        <div class="row-actions" style="justify-content:space-between; align-items:center">
+          <h3 style="margin:0">Today's tasks</h3>
+          ${tasksKeys.length ? `<div class="row-actions">
+            <button type="button" class="linkish" data-dash-expand-all="tasks">Expand all</button>
+            <button type="button" class="linkish" data-dash-collapse-all="tasks">Collapse all</button>
+          </div>` : ""}
+        </div>
         <p class="hint">Portal schedule reminders and results due ${fmt(data.today)}. Check them off once done.</p>
-        ${taskChecklist(data.schedule_today, "schedule")}
-        ${taskChecklist(data.results_today, "results")}
+        ${taskChecklist(data.schedule_today, "schedule", expanded)}
+        ${taskChecklist(data.results_today, "results", expanded)}
       </div>
       <div class="card">
-        <h3>Today's assessments</h3>
-        ${taskChecklist(data.assessments_today, "assessment")}
+        <div class="row-actions" style="justify-content:space-between; align-items:center">
+          <h3 style="margin:0">Today's assessments</h3>
+          ${assessmentsKeys.length ? `<div class="row-actions">
+            <button type="button" class="linkish" data-dash-expand-all="assessments">Expand all</button>
+            <button type="button" class="linkish" data-dash-collapse-all="assessments">Collapse all</button>
+          </div>` : ""}
+        </div>
+        ${taskChecklist(data.assessments_today, "assessment", expanded)}
         <h3 style="margin-top:18px">Upcoming</h3>
-        ${taskChecklist(data.upcoming, "assessment")}
+        ${taskChecklist(data.upcoming, "assessment", expanded)}
       </div>
     </div>
   `;
+  document.querySelectorAll(".dash-detail-toggle").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const key = btn.dataset.dashKey;
+      state.dashboard.expanded[key] = !state.dashboard.expanded[key];
+      renderDashboard();
+    });
+  });
+  $("view-dashboard").querySelector('[data-dash-expand-all="tasks"]')?.addEventListener("click", () => {
+    tasksKeys.forEach((key) => { state.dashboard.expanded[key] = true; });
+    renderDashboard();
+  });
+  $("view-dashboard").querySelector('[data-dash-collapse-all="tasks"]')?.addEventListener("click", () => {
+    tasksKeys.forEach((key) => { state.dashboard.expanded[key] = false; });
+    renderDashboard();
+  });
+  $("view-dashboard").querySelector('[data-dash-expand-all="assessments"]')?.addEventListener("click", () => {
+    assessmentsKeys.forEach((key) => { state.dashboard.expanded[key] = true; });
+    renderDashboard();
+  });
+  $("view-dashboard").querySelector('[data-dash-collapse-all="assessments"]')?.addEventListener("click", () => {
+    assessmentsKeys.forEach((key) => { state.dashboard.expanded[key] = false; });
+    renderDashboard();
+  });
   document.querySelectorAll("[data-dash-task-id]").forEach((box) => {
     box.addEventListener("change", async () => {
       const taskIdValue = box.dataset.dashTaskId;
@@ -1297,6 +1373,145 @@ async function renderFinder() {
     state.prefill = picked;
     state.schedulerTab = "entry";
     switchView("scheduler", { prefill: picked });
+  });
+}
+
+// Assessor Directory — search any assessor by name and see their full profile,
+// including every qualification they're accredited for (an assessor often holds
+// several, each with its own accreditation number / expiry from the source Excel).
+function directoryAssessorKey(a) {
+  return `${a.assessor_type || "province"}:${a.identity_key || a.name}`;
+}
+
+function directoryAssessorCardHtml(a, expanded) {
+  const assessorType = a.assessor_type || "province";
+  const key = directoryAssessorKey(a);
+  const isExpanded = Boolean(expanded[key]);
+  const profileFields = [
+    ["Region", a.region],
+    ["Province", a.province],
+    ["Address", a.address],
+    ["Sex", a.sex],
+    ["Date of Birth", a.date_of_birth ? fmt(a.date_of_birth) : ""],
+    ["Present Designation", a.designation],
+    ["Company Name", a.company],
+    ["Sector", a.sector],
+  ].filter(([, value]) => value);
+  const qualDetails = (a.qualification_details && a.qualification_details.length)
+    ? a.qualification_details
+    : (a.qualifications || []).map((q) => ({ qualification: q, accreditation_number: "", valid_until: "" }));
+  const summary = [a.designation, a.company].filter(Boolean).join(" · ");
+  return `
+    <div class="task finder-assessor-card">
+      <div class="finder-assessor-head">
+        <div class="finder-assessor-name">
+          <b>${escapeHtml(a.display_name || a.name)}</b>
+          ${!isExpanded && summary ? `<span class="muted" style="font-size:0.82rem">${escapeHtml(summary)}</span>` : ""}
+        </div>
+        <div class="row-actions" style="align-items:center; gap:8px; flex-wrap:nowrap">
+          <span class="chip ${assessorType === "region" ? "gold" : ""}">${assessorType === "region" ? "Region-Based" : "Province-Based"}</span>
+          ${(a.sources || []).length > 1 ? `<span class="chip" title="Listed under both the province and region sheets — shown as province-based first">Also Region-Based</span>` : ""}
+          <span class="chip">${qualDetails.length} qualification${qualDetails.length === 1 ? "" : "s"}</span>
+          <button type="button" class="linkish directory-assessor-toggle" data-assessor-key="${escapeHtml(key)}">${isExpanded ? "Hide details ▴" : "Show details ▾"}</button>
+        </div>
+      </div>
+      ${isExpanded ? `
+        ${profileFields.length ? `<dl class="assessment-card-grid" style="margin-top:8px">
+          ${profileFields.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}
+        </dl>` : ""}
+        <p class="muted" style="font-size:0.78rem; text-transform:uppercase; letter-spacing:0.06em; margin-top:14px">Accredited qualifications</p>
+        <div class="directory-qual-list">
+          ${qualDetails.map((q) => `
+            <div class="directory-qual-row">
+              <div class="row-actions" style="gap:6px; align-items:center">
+                <b>${escapeHtml(q.qualification)}</b>
+                ${q.source ? `<span class="chip ${q.source === "region" ? "gold" : ""}">${q.source === "region" ? "Region" : "Province"}</span>` : ""}
+              </div>
+              <span class="muted">
+                ${q.accreditation_number ? `Code #: ${escapeHtml(q.accreditation_number)}` : "No accreditation number on file"}
+                ${q.valid_until ? ` · Valid until: ${escapeHtml(fmt(q.valid_until))}` : ""}
+              </span>
+            </div>
+          `).join("")}
+        </div>
+      ` : ""}
+    </div>
+  `;
+}
+
+async function renderDirectory() {
+  const query = state.directory.query;
+  const source = state.directory.source || "";
+  const data = await api(`/api/assessor-directory?q=${encodeURIComponent(query)}&source=${encodeURIComponent(source)}`);
+  state.directory.expanded = state.directory.expanded || {};
+  const assessors = data.assessors || [];
+
+  $("view-directory").innerHTML = `
+    <div class="card">
+      <div class="scheduler-form-head" style="margin:-18px -18px 16px;">
+        <p class="eyebrow-tag">Assessor Directory</p>
+        <h3>Search assessors</h3>
+        <p>Find any assessor by name and see their full record, including every qualification they're accredited for.</p>
+      </div>
+      <div class="toolbar">
+        <input id="directory-q" placeholder="Search assessor name…" value="${escapeHtml(query)}" style="flex:1; min-width:220px" autofocus />
+        <button class="ghost" id="directory-clear">Clear</button>
+      </div>
+      <div class="pill-tabs" id="directory-source-tabs" style="margin-top:14px">
+        <button type="button" class="tab-btn ${source === "" ? "active" : ""}" data-source="">
+          <span class="tab-dot"></span>All
+        </button>
+        <button type="button" class="tab-btn ${source === "province" ? "active" : ""}" data-source="province">
+          <span class="tab-dot"></span>Province-Based
+        </button>
+        <button type="button" class="tab-btn ${source === "region" ? "active" : ""}" data-source="region">
+          <span class="tab-dot"></span>Region-Based
+        </button>
+      </div>
+      <div class="row-actions" style="justify-content:space-between; align-items:center; margin:14px 0 10px">
+        <p class="hint" style="margin:0">${assessors.length} assessor${assessors.length === 1 ? "" : "s"} found${query ? ` for "${escapeHtml(query)}"` : ""}</p>
+        ${assessors.length ? `<div class="row-actions">
+          <button type="button" class="linkish" id="directory-expand-all">Expand all</button>
+          <button type="button" class="linkish" id="directory-collapse-all">Collapse all</button>
+        </div>` : ""}
+      </div>
+      ${assessors.length
+        ? assessors.map((a) => directoryAssessorCardHtml(a, state.directory.expanded)).join("")
+        : `<p class="empty">${query ? "No assessors match that search." : "Start typing a name to search, or browse by switching the tabs above."}</p>`}
+    </div>
+  `;
+
+  const box = $("directory-q");
+  box.addEventListener("input", debounce(() => {
+    state.directory.query = box.value;
+    renderDirectory();
+  }, 250));
+  box.focus();
+  box.selectionStart = box.selectionEnd = box.value.length;
+  $("directory-clear").onclick = () => {
+    state.directory = { query: "", source: state.directory.source, expanded: {} };
+    renderDirectory();
+  };
+  document.querySelectorAll("#directory-source-tabs .tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.directory.source = btn.dataset.source;
+      renderDirectory();
+    });
+  });
+  document.querySelectorAll(".directory-assessor-toggle").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const key = btn.dataset.assessorKey;
+      state.directory.expanded[key] = !state.directory.expanded[key];
+      renderDirectory();
+    });
+  });
+  $("directory-expand-all")?.addEventListener("click", () => {
+    assessors.forEach((a) => { state.directory.expanded[directoryAssessorKey(a)] = true; });
+    renderDirectory();
+  });
+  $("directory-collapse-all")?.addEventListener("click", () => {
+    assessors.forEach((a) => { state.directory.expanded[directoryAssessorKey(a)] = false; });
+    renderDirectory();
   });
 }
 

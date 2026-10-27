@@ -14,14 +14,29 @@ from openpyxl.worksheet.properties import PageSetupProperties
 from date_rules import parse_iso_date
 
 
-def compact_day_span(start: date, end: date) -> str:
-    if start == end:
-        return str(start.day)
-    if start.month == end.month and start.year == end.year:
-        return f"{start.day}-{end.day}"
-    if start.year == end.year:
-        return f"{start.month}/{start.day}-{end.month}/{end.day}"
-    return f"{start.month}/{start.day}/{start.year}-{end.month}/{end.day}/{end.year}"
+def compact_dates_list(iso_dates: list[str]) -> str:
+    """Compact label for a list of dates. A contiguous run collapses to a M/D-M/D
+    range, same as before. A non-contiguous ("multiple"/skip-day) list — e.g. the
+    28th, 30th and 31st, with the 29th skipped — is spelled out day by day instead
+    of compressed into a range, so the gap is never silently hidden in the export.
+    """
+    if not iso_dates:
+        return ""
+    parsed = sorted({parse_iso_date(value) for value in iso_dates})
+    first, last = parsed[0], parsed[-1]
+    if len(parsed) == 1:
+        return f"{first.month}/{first.day}/{first.year}"
+    contiguous = all((parsed[i] - parsed[i - 1]).days == 1 for i in range(1, len(parsed)))
+    if contiguous:
+        if first.month == last.month and first.year == last.year:
+            return f"{first.month}/{first.day}-{last.day}/{last.year}"
+        if first.year == last.year:
+            return f"{first.month}/{first.day}-{last.month}/{last.day}, {last.year}"
+        return f"{first.month}/{first.day}/{first.year}-{last.month}/{last.day}/{last.year}"
+    same_month_year = all(d.month == first.month and d.year == first.year for d in parsed)
+    if same_month_year:
+        return f"{first.month}/{', '.join(str(d.day) for d in parsed)}/{first.year}"
+    return ", ".join(f"{d.month}/{d.day}/{d.year}" for d in parsed)
 
 
 def compact_assessors(assessors: list[dict]) -> str:
@@ -33,20 +48,6 @@ def compact_assessors(assessors: list[dict]) -> str:
         if a.get("name")
     ]
     return "\n".join(labels)
-
-
-def compact_approved_dates(iso_dates: list[str]) -> str:
-    if not iso_dates:
-        return ""
-    parsed = sorted({parse_iso_date(value) for value in iso_dates})
-    first, last = parsed[0], parsed[-1]
-    if first == last:
-        return f"{first.month}/{first.day}/{first.year}"
-    if first.month == last.month and first.year == last.year:
-        return f"{first.month}/{first.day}-{last.day}/{last.year}"
-    if first.year == last.year:
-        return f"{first.month}/{first.day}-{last.month}/{last.day}, {last.year}"
-    return f"{first.month}/{first.day}/{first.year}-{last.month}/{last.day}/{last.year}"
 
 
 def _write_monitoring_sheet(sheet, month_label: str, items: list[dict]) -> None:
@@ -105,14 +106,17 @@ def _write_monitoring_sheet(sheet, month_label: str, items: list[dict]) -> None:
 
     for index, item in enumerate(items):
         row = 3 + index
-        start = parse_iso_date(item["start_date"])
-        end = parse_iso_date(item["end_date"])
         assessor_text = compact_assessors(item.get("assessors") or [])
+        # assessment_dates is the authoritative list of every day actually
+        # assessed — for a "multiple" (skip-day) schedule it already excludes
+        # the skipped day(s), so compact_dates_list spells those out instead
+        # of collapsing to a misleading start-end range.
+        assessment_dates = item.get("assessment_dates") or [item["start_date"], item["end_date"]]
         values = [
-            compact_approved_dates(item.get("approved_date_list") or []),
+            compact_dates_list(item.get("approved_date_list") or []),
             item.get("assessment_center") or "",
             item.get("qualification") or "",
-            compact_day_span(start, end),
+            compact_dates_list(assessment_dates),
             item.get("pax") or "",
             assessor_text,
             item.get("tesda_representative") or "",
@@ -126,7 +130,14 @@ def _write_monitoring_sheet(sheet, month_label: str, items: list[dict]) -> None:
             cell.border = thin
             if fill:
                 cell.fill = fill
-        line_count = max(1, assessor_text.count("\n") + 1)
+        # A skip-day schedule can make the APPROVED DATES / ASSESSMENT DATE cells
+        # noticeably longer than the simple ranges they used to hold, so size the
+        # row from whichever cell needs the most wrapped lines, not just the
+        # assessor list.
+        assessor_lines = assessor_text.count("\n") + 1
+        approved_lines = -(-len(str(values[0])) // 16) if values[0] else 1
+        assessment_date_lines = -(-len(str(values[3])) // 14) if values[3] else 1
+        line_count = max(1, assessor_lines, approved_lines, assessment_date_lines)
         sheet.row_dimensions[row].height = max(32, 16 * line_count + 16)
 
     widths = [18, 42, 36, 16, 14, 28, 26, 30]

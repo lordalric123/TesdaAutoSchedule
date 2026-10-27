@@ -786,6 +786,28 @@ def assessors():
     return jsonify({"filtered": bool(qualification), "assessors": people, "source": source or "all"})
 
 
+@app.get("/api/assessor-directory")
+def assessor_directory():
+    # Every assessor across both Excel sources, merged by identity so a person
+    # who's accredited for several qualifications (common — one assessor can
+    # hold multiple competency certifications) shows up once with the full
+    # list, not once per qualification. Searchable by name.
+    query = (request.args.get("q") or "").strip()
+    source = request.args.get("source") or None
+    if source not in {None, "", "province", "region"}:
+        return jsonify({"error": "Assessor source must be province or region."}), 400
+    people = registry.assessors(None, source or None)
+    if query:
+        needle = query.strip().casefold()
+        people = [
+            p
+            for p in people
+            if needle in p["name"].casefold()
+            or needle in (p.get("display_name") or "").casefold()
+        ]
+    return jsonify({"query": query, "source": source or "all", "assessors": people, "count": len(people)})
+
+
 @app.get("/api/finder")
 def finder():
     query = request.args.get("q", "").strip()

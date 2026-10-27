@@ -592,6 +592,17 @@ th { color: var(--gold); font-weight: 500; font-size: 0.75rem; letter-spacing: 0
 .finder-assessor-card { padding: 12px; border: 1px solid var(--line); border-radius: 12px; margin-bottom: 10px; }
 .finder-assessor-card:last-child { margin-bottom: 0; }
 .finder-assessor-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.directory-qual-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.directory-qual-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--input-bg);
+}
+.directory-qual-row span { font-size: 0.8rem; }
 .pick {
   border: 1px solid var(--line);
   background: var(--input-bg);
