@@ -1,8 +1,6 @@
 {
   "centers_path": "C:\\Users\\OWNER\\Documents\\TesdaAutoSchedule\\data\\excel\\assessment_centers.xlsx",
   "assessors_path": "C:\\Users\\OWNER\\Documents\\TesdaAutoSchedule\\data\\excel\\competency_assessors.xlsx",
-  "province_assessors_path": "C:\\Users\\OWNER\\Documents\\TesdaAutoSchedule\\data\\excel\\competency_assessors.xlsx",
-  "region_assessors_path": "C:\\Users\\OWNER\\Documents\\TesdaAutoSchedule\\data\\excel\\region_assessors.xlsx",
   "theme": {
     "preset": "dark",
     "primary": "#22d3ee",
@@ -18,5 +16,8 @@
     "sub": "Competency Assessment Control",
     "logo_filename": "logo.svg",
     "logo_version": "c487f2ce166e4181b2d21e15aec102ab"
-  }
+  },
+  "home_province": "Southern Leyte",
+  "province_assessors_path": "C:\\Users\\OWNER\\Documents\\TesdaAutoSchedule\\data\\excel\\competency_assessors.xlsx",
+  "region_assessors_path": "C:\\Users\\OWNER\\Documents\\TesdaAutoSchedule\\data\\excel\\region_assessors.xlsx"
 }

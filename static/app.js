@@ -334,6 +334,11 @@ async function renderDashboard() {
   maybeNotify(data);
 }
 
+function todayIso() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function fmt(iso) {
   if (!iso) return "—";
   let d = new Date(`${iso}T00:00:00`);
@@ -1222,6 +1227,7 @@ function finderAssessorCardHtml(a, picked, expanded) {
         </div>
         <div class="row-actions" style="align-items:center; gap:8px; flex-wrap:nowrap">
           <span class="chip ${assessorType === "region" ? "gold" : ""}">${assessorType === "region" ? "Region-Based" : "Province-Based"}</span>
+          ${a.valid_until && a.valid_until < todayIso() ? `<span class="chip rose">Expired · ${escapeHtml(fmt(a.valid_until))}</span>` : (a.valid_until ? `<span class="muted" style="font-size:0.78rem">Valid until ${escapeHtml(fmt(a.valid_until))}</span>` : "")}
           ${details.length ? `<button type="button" class="linkish finder-assessor-toggle" data-assessor-key="${escapeHtml(key)}">${isExpanded ? "Hide details ▴" : "Show details ▾"}</button>` : ""}
         </div>
       </div>
@@ -1431,6 +1437,7 @@ function directoryAssessorCardHtml(a, expanded) {
                 ${q.accreditation_number ? `Code #: ${escapeHtml(q.accreditation_number)}` : "No accreditation number on file"}
                 ${q.valid_until ? ` · Valid until: ${escapeHtml(fmt(q.valid_until))}` : ""}
               </span>
+              ${q.valid_until && q.valid_until < todayIso() ? `<span class="chip rose">Expired</span>` : ""}
             </div>
           `).join("")}
         </div>
@@ -1530,6 +1537,14 @@ function daysSinceLabel(days) {
   return `${days} days ago`;
 }
 
+function accreditationStatusHtml(row) {
+  if (!row.valid_until) return `<span class="muted">No record</span>`;
+  if (row.is_expired) {
+    return `<span class="chip rose">Expired · ${escapeHtml(fmt(row.valid_until))}</span>`;
+  }
+  return `<span class="muted">Valid until ${escapeHtml(fmt(row.valid_until))}</span>`;
+}
+
 async function renderHistory() {
   const { qualification, assessor_type } = state.history;
   const tab = state.history.tab === "log" ? "log" : "rotation";
@@ -1546,7 +1561,7 @@ async function renderHistory() {
   ` : `
     <p class="hint">Rotation for <b>${escapeHtml(data.qualification)}</b>${sourceLabel ? ` · ${sourceLabel} assessors only` : ""} · sorted so whoever has gone longest without an assignment (or has never been assigned) is listed first. Click a row to see full assessment history.</p>
     ${data.rotation.length ? `<div class="table-wrap desktop-table"><table>
-      <thead><tr><th>#</th><th>Assessor</th><th>Type</th><th>Times Assessed</th><th>Last Assessed</th><th>Since</th></tr></thead>
+      <thead><tr><th>#</th><th>Assessor</th><th>Type</th><th>Times Assessed</th><th>Last Assessed</th><th>Since</th><th>Accreditation</th></tr></thead>
       <tbody>
         ${data.rotation.map((row, i) => `
           <tr class="rotation-row" data-assessor-row="${i}" style="cursor:pointer">
@@ -1556,6 +1571,7 @@ async function renderHistory() {
             <td>${row.assessments_conducted}</td>
             <td>${row.last_assessment_date ? escapeHtml(fmt(row.last_assessment_date)) : `<span class="muted">Never</span>`}</td>
             <td>${escapeHtml(daysSinceLabel(row.days_since_last))}</td>
+            <td>${accreditationStatusHtml(row)}</td>
           </tr>
         `).join("")}
       </tbody>
@@ -1566,6 +1582,7 @@ async function renderHistory() {
         <div class="record-meta">
           <span class="chip">${escapeHtml(row.assessor_type_label)}</span>
           <span>${row.assessments_conducted} assessment${row.assessments_conducted === 1 ? "" : "s"}</span>
+          ${accreditationStatusHtml(row)}
         </div>
         <div class="muted">Last assessed: ${row.last_assessment_date ? fmt(row.last_assessment_date) : "Never"} · ${escapeHtml(daysSinceLabel(row.days_since_last))}</div>
       </article>
@@ -1686,6 +1703,7 @@ function openExportHistoryModal() {
   state.history.exportStart = state.history.exportStart || "";
   state.history.exportEnd = state.history.exportEnd || "";
   state.history.exportGroupBy = state.history.exportGroupBy || "month";
+  state.history.exportYear = state.history.exportYear || String(new Date().getFullYear());
 
   const whatOptions = [
     { value: "", label: "All" },
@@ -1696,13 +1714,17 @@ function openExportHistoryModal() {
     { value: "month", label: "Split by Month" },
     { value: "year", label: "Whole Year" },
   ];
+  const isYearMode = state.history.exportGroupBy === "year";
+  const thisYear = new Date().getFullYear();
+  const yearOptions = [];
+  for (let y = thisYear + 1; y >= thisYear - 15; y -= 1) yearOptions.push(y);
 
   openModal(`
     <div class="modal-head">
       <div>
         <p class="eyebrow">Assessor History</p>
         <h2>Export to Excel</h2>
-        <p class="muted">Every qualification is always included — choose what to export and, optionally, an inclusive date range.</p>
+        <p class="muted">Every qualification is always included — choose what to export and, optionally, narrow it down.</p>
       </div>
       <button class="ghost" id="close-modal">Close</button>
     </div>
@@ -1725,15 +1747,23 @@ function openExportHistoryModal() {
       </div>
       <p class="hint" style="margin-top:6px">"Split by Month" gives one sheet per month, as before. "Whole Year" gives one sheet per calendar year, listing every assignment of assessors for that year.</p>
     </div>
-    <div class="field full">
-      <label>When <span class="muted" style="font-weight:400;text-transform:none;letter-spacing:0">(optional, inclusive)</span></label>
-      <div class="row-actions" style="align-items:center; flex-wrap:wrap; gap:10px">
-        <span class="muted" style="font-size:0.78rem;text-transform:uppercase;letter-spacing:0.06em">From</span>
-        <input type="date" id="export-start" value="${state.history.exportStart}" style="padding:8px 10px" />
-        <span class="muted" style="font-size:0.78rem;text-transform:uppercase;letter-spacing:0.06em">To</span>
-        <input type="date" id="export-end" value="${state.history.exportEnd}" style="padding:8px 10px" />
-      </div>
-      <p class="hint" style="margin-top:6px">Leave both blank to export the full history, or set a range to narrow it.</p>
+    <div class="field full" id="export-when-field">
+      ${isYearMode ? `
+        <label>Year</label>
+        <select id="export-year" style="padding:8px 10px; max-width:160px">
+          ${yearOptions.map((y) => `<option value="${y}" ${String(y) === state.history.exportYear ? "selected" : ""}>${y}</option>`).join("")}
+        </select>
+        <p class="hint" style="margin-top:6px">Exports one sheet per qualification for that calendar year only.</p>
+      ` : `
+        <label>When <span class="muted" style="font-weight:400;text-transform:none;letter-spacing:0">(optional, inclusive)</span></label>
+        <div class="row-actions" style="align-items:center; flex-wrap:wrap; gap:10px">
+          <span class="muted" style="font-size:0.78rem;text-transform:uppercase;letter-spacing:0.06em">From</span>
+          <input type="date" id="export-start" value="${state.history.exportStart}" style="padding:8px 10px" />
+          <span class="muted" style="font-size:0.78rem;text-transform:uppercase;letter-spacing:0.06em">To</span>
+          <input type="date" id="export-end" value="${state.history.exportEnd}" style="padding:8px 10px" />
+        </div>
+        <p class="hint" style="margin-top:6px">Leave both blank to export the full history, or set a range to narrow it.</p>
+      `}
     </div>
     <div class="field full row-actions">
       <button class="primary" type="button" id="export-confirm">Export to Excel</button>
@@ -1743,26 +1773,42 @@ function openExportHistoryModal() {
 
   $("close-modal").onclick = closeModal;
   $("export-cancel").onclick = closeModal;
-  $("export-start").addEventListener("change", (e) => { state.history.exportStart = e.target.value; });
-  $("export-end").addEventListener("change", (e) => { state.history.exportEnd = e.target.value; });
+  $("export-start")?.addEventListener("change", (e) => { state.history.exportStart = e.target.value; });
+  $("export-end")?.addEventListener("change", (e) => { state.history.exportEnd = e.target.value; });
+  $("export-year")?.addEventListener("change", (e) => { state.history.exportYear = e.target.value; });
   document.querySelectorAll('input[name="export_what"]').forEach((input) => {
     input.addEventListener("change", () => { if (input.checked) state.history.exportType = input.value; });
   });
   document.querySelectorAll('input[name="export_period"]').forEach((input) => {
-    input.addEventListener("change", () => { if (input.checked) state.history.exportGroupBy = input.value; });
+    input.addEventListener("change", () => {
+      if (input.checked) {
+        state.history.exportGroupBy = input.value;
+        openExportHistoryModal();
+      }
+    });
   });
   $("export-confirm").addEventListener("click", () => {
-    const start = state.history.exportStart;
-    const end = state.history.exportEnd;
-    if (start && end && end < start) {
-      toast("End date must be on or after the start date.", "error");
-      return;
-    }
     const exportParams = new URLSearchParams();
     exportParams.set("assessor_type", state.history.exportType || "");
     exportParams.set("group_by", state.history.exportGroupBy || "month");
-    if (start) exportParams.set("start_date", start);
-    if (end) exportParams.set("end_date", end);
+    if (isYearMode) {
+      const year = state.history.exportYear;
+      if (!year) {
+        toast("Choose a year.", "error");
+        return;
+      }
+      exportParams.set("start_date", `${year}-01-01`);
+      exportParams.set("end_date", `${year}-12-31`);
+    } else {
+      const start = state.history.exportStart;
+      const end = state.history.exportEnd;
+      if (start && end && end < start) {
+        toast("End date must be on or after the start date.", "error");
+        return;
+      }
+      if (start) exportParams.set("start_date", start);
+      if (end) exportParams.set("end_date", end);
+    }
     window.location.href = `/api/assessor-rotation/export?${exportParams.toString()}`;
     closeModal();
   });
@@ -1781,6 +1827,7 @@ function showAssessorHistory(row, qualification) {
         <p class="eyebrow">${escapeHtml(row.assessor_type_label)} · ${escapeHtml(qualification)}</p>
         <h2>${escapeHtml(row.assessor)}</h2>
         <p class="muted">${row.assessments_conducted} assessment${row.assessments_conducted === 1 ? "" : "s"} on record · Last assessed: ${row.last_assessment_date ? escapeHtml(fmt(row.last_assessment_date)) : "Never"}</p>
+        <p>${accreditationStatusHtml(row)}</p>
       </div>
       <button class="ghost" id="close-modal">Close</button>
     </div>
@@ -1961,16 +2008,25 @@ async function renderSettings() {
           <input type="file" name="file" accept=".xlsx,.xls" required />
           <button class="ghost">Upload centers file</button>
         </form>
-        <p style="margin-top:16px"><b>Province-Based Competency Assessors</b><br><span class="muted">${escapeHtml(data.province_assessors_file_name || data.assessors_file_name)} · ${data.province_assessor_records ?? data.assessor_records} rows · ${data.unique_province_assessors ?? data.unique_assessors} unique</span></p>
+        <p style="margin-top:16px"><b>Province-Based Competency Assessors</b><br><span class="muted">${escapeHtml(data.province_assessors_file_name || data.assessors_file_name)} · ${data.unique_province_assessors ?? 0} currently show as province-based</span></p>
         <form class="row-actions" data-upload="province">
           <input type="file" name="file" accept=".xlsx,.xls" required />
           <button class="ghost">Upload province assessors</button>
         </form>
-        <p style="margin-top:16px"><b>Region-Based Competency Assessors</b><br><span class="muted">${escapeHtml(data.region_assessors_file_name || "No region file uploaded yet")} · ${data.region_assessor_records || 0} rows · ${data.unique_region_assessors || 0} unique</span></p>
+        <p style="margin-top:16px"><b>Region-Based Competency Assessors</b><br><span class="muted">${escapeHtml(data.region_assessors_file_name || "No region file uploaded yet")} · ${data.unique_region_assessors ?? 0} currently show as region-based</span></p>
         <form class="row-actions" data-upload="region">
           <input type="file" name="file" accept=".xlsx,.xls" required />
           <button class="ghost">Upload region assessors</button>
         </form>
+        <p class="hint" style="margin-top:6px">Both files are loaded together (${data.assessor_records} rows total, ${data.unique_assessors} unique assessors). Which one an assessor shows under isn't decided by which file they're in — it's decided by their row's PROVINCE column, below. That means someone listed in the region file whose province is Southern Leyte will still show up as province-based.</p>
+        <div class="field" style="margin-top:14px">
+          <label>Home Province</label>
+          <input type="text" id="home-province-input" value="${escapeHtml(data.home_province || "")}" placeholder="e.g. Southern Leyte" />
+        </div>
+        <p class="hint" style="margin-top:4px">An assessor (in either file) is <b>Province-Based</b> when their row's PROVINCE column matches this exactly; otherwise (including a blank PROVINCE) they're treated as <b>Region-Based</b>.</p>
+        <div class="row-actions" style="margin-top:10px">
+          <button class="ghost" id="home-province-save">Save home province</button>
+        </div>
         <div class="row-actions" style="margin-top:16px">
           <button class="primary" id="reload-excel">Refresh / reload Excel data</button>
         </div>
@@ -2076,6 +2132,16 @@ async function renderSettings() {
       toast(err.message, "error");
     }
   });
+  $("home-province-save").onclick = async () => {
+    const home_province = $("home-province-input").value.trim();
+    try {
+      await api("/api/settings/home-province", { method: "POST", headers: jsonHeaders(), body: JSON.stringify({ home_province }) });
+      toast("Home province saved and Excel data reloaded.");
+      await renderSettings();
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  };
   $("reload-excel").onclick = async () => {
     try {
       await api("/api/settings/reload", { method: "POST" });

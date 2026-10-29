@@ -62,6 +62,7 @@ DEFAULT_CENTERS = EXCEL_DIR / "assessment_centers.xlsx"
 DEFAULT_PROVINCE_ASSESSORS = EXCEL_DIR / "competency_assessors.xlsx"
 DEFAULT_REGION_ASSESSORS = EXCEL_DIR / "region_assessors.xlsx"
 DEFAULT_ASSESSORS = DEFAULT_PROVINCE_ASSESSORS
+DEFAULT_HOME_PROVINCE = "Southern Leyte"
 
 
 def seed_excel_dir() -> None:
@@ -142,6 +143,7 @@ settings_store = JsonStore(
         "province_assessors_path": str(DEFAULT_PROVINCE_ASSESSORS),
         "region_assessors_path": str(DEFAULT_REGION_ASSESSORS),
         "assessors_path": str(DEFAULT_PROVINCE_ASSESSORS),
+        "home_province": DEFAULT_HOME_PROVINCE,
         "theme": dict(DEFAULT_THEME),
         "branding": dict(DEFAULT_BRANDING),
     },
@@ -166,6 +168,7 @@ def normalize_settings(raw: dict | None = None) -> dict:
         settings["province_assessors_path"] = settings.get("assessors_path") or str(DEFAULT_PROVINCE_ASSESSORS)
     settings["assessors_path"] = settings["province_assessors_path"]
     settings.setdefault("region_assessors_path", str(DEFAULT_REGION_ASSESSORS))
+    settings.setdefault("home_province", DEFAULT_HOME_PROVINCE)
     theme = dict(DEFAULT_THEME)
     theme.update(settings.get("theme") or {})
     settings["theme"] = theme
@@ -182,6 +185,7 @@ def load_registry() -> None:
         settings["centers_path"],
         settings["province_assessors_path"],
         settings.get("region_assessors_path"),
+        settings.get("home_province") or DEFAULT_HOME_PROVINCE,
     )
 
 
@@ -435,11 +439,15 @@ def build_assessor_rotation(
                 "assessor_type_label": "Region-Based" if source == "region" else "Province-Based",
                 "address": "",
                 "designation": "",
+                "accreditation_number": "",
+                "valid_until": "",
+                "is_expired": False,
                 "history": [],
             }
             entries[key] = row
         return row
 
+    today_iso_early = date.today().isoformat()
     if qualification:
         for person in registry.assessors(qualification):
             source = person.get("assessor_type") or "province"
@@ -449,6 +457,10 @@ def build_assessor_rotation(
             row = ensure(key, person.get("display_name") or person["name"], source)
             row["address"] = person.get("address", "")
             row["designation"] = person.get("designation") or person.get("company") or ""
+            valid_until = person.get("valid_until") or ""
+            row["accreditation_number"] = person.get("accreditation_number") or ""
+            row["valid_until"] = valid_until
+            row["is_expired"] = bool(valid_until) and valid_until < today_iso_early
 
         for item in decorated:
             for entry in item["assessors"]:
@@ -728,10 +740,10 @@ def reload_data():
 def upload_excel():
     kind = request.form.get("kind")
     uploaded = request.files.get("file")
-    if kind not in {"centers", "province", "region", "assessors"} or not uploaded or not uploaded.filename:
-        return jsonify({"ok": False, "error": "Upload an Excel file for centers or assessors."}), 400
     if kind == "assessors":
         kind = "province"
+    if kind not in {"centers", "province", "region"} or not uploaded or not uploaded.filename:
+        return jsonify({"ok": False, "error": "Upload an Excel file for centers or assessors."}), 400
     filename = secure_filename(uploaded.filename)
     suffix = Path(filename).suffix.lower()
     if suffix not in {".xlsx", ".xls"}:
@@ -752,6 +764,20 @@ def upload_excel():
     else:
         settings["province_assessors_path"] = str(dest)
         settings["assessors_path"] = str(dest)
+    settings_store.write(settings)
+    try:
+        load_registry()
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc), **registry.summary()}), 400
+    return jsonify({"ok": True, **registry.summary()})
+
+
+@app.post("/api/settings/home-province")
+def save_home_province():
+    payload = request.get_json(force=True) or {}
+    home_province = (payload.get("home_province") or "").strip()
+    settings = normalize_settings()
+    settings["home_province"] = home_province or DEFAULT_HOME_PROVINCE
     settings_store.write(settings)
     try:
         load_registry()
@@ -1075,7 +1101,10 @@ def export_assessor_history():
 
         assessment_log = [item for item in assessment_log if in_range(item)]
 
-    buffer = build_assessor_history_workbook(assessment_log, assessor_type=assessor_type, group_by=group_by)
+    home_province = normalize_settings().get("home_province") or DEFAULT_HOME_PROVINCE
+    buffer = build_assessor_history_workbook(
+        assessment_log, assessor_type=assessor_type, group_by=group_by, home_province=home_province
+    )
     stamp = datetime.now().strftime("%Y%m%d")
     name_bits = ["Assessor_History"]
     if assessor_type:
@@ -1209,7 +1238,8 @@ def export_backup():
         archive.writestr("settings.json", json.dumps(normalize_settings(settings), indent=2, ensure_ascii=False))
         for label, path_value in {
             "excel/assessment_centers.xlsx": settings.get("centers_path"),
-            "excel/competency_assessors.xlsx": settings.get("province_assessors_path") or settings.get("assessors_path"),
+            "excel/competency_assessors.xlsx": settings.get("province_assessors_path")
+            or settings.get("assessors_path"),
             "excel/region_assessors.xlsx": settings.get("region_assessors_path"),
         }.items():
             path = Path(path_value) if path_value else None
@@ -1301,6 +1331,7 @@ def import_backup():
                 "province_assessors_path": str(DEFAULT_PROVINCE_ASSESSORS),
                 "assessors_path": str(DEFAULT_PROVINCE_ASSESSORS),
                 "region_assessors_path": str(DEFAULT_REGION_ASSESSORS),
+                "home_province": (imported_settings or {}).get("home_province") or DEFAULT_HOME_PROVINCE,
                 "theme": (imported_settings or {}).get("theme") or dict(DEFAULT_THEME),
                 "branding": (imported_settings or {}).get("branding") or dict(DEFAULT_BRANDING),
             }

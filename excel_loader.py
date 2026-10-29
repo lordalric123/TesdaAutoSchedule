@@ -132,12 +132,12 @@ def _validate(df: pd.DataFrame, required: list[str], label: str) -> None:
         )
 
 
-def _load_assessor_file(path: Path | None, source: str, label: str) -> list[dict]:
+def _load_assessor_file(path: Path | None, home_province: str, label: str) -> list[dict]:
     if path is None or not str(path).strip() or not Path(path).exists():
         return []
     df = _read_excel(Path(path))
     _validate(df, REQUIRED_ASSESSOR_COLUMNS, label)
-    rows = [_assessor_record(row, source) for _, row in df.iterrows()]
+    rows = [_assessor_record(row, home_province) for _, row in df.iterrows()]
     return [row for row in rows if row["name"] and row["qualification"]]
 
 
@@ -146,50 +146,66 @@ class ExcelRegistry:
         self.centers_path: Path | None = None
         self.province_assessors_path: Path | None = None
         self.region_assessors_path: Path | None = None
+        self.home_province: str = ""
         self.center_rows: list[dict] = []
-        self.province_rows: list[dict] = []
-        self.region_rows: list[dict] = []
+        self.assessor_rows: list[dict] = []
         self.error: str | None = None
         self.loaded_at: str | None = None
 
     @property
-    def assessor_rows(self) -> list[dict]:
-        return self.province_rows + self.region_rows
+    def province_rows(self) -> list[dict]:
+        return [row for row in self.assessor_rows if row["source"] == "province"]
+
+    @property
+    def region_rows(self) -> list[dict]:
+        return [row for row in self.assessor_rows if row["source"] == "region"]
 
     def load(
         self,
         centers_path: str | Path,
         province_assessors_path: str | Path,
         region_assessors_path: str | Path | None = None,
+        home_province: str = "",
     ) -> None:
         self.centers_path = Path(centers_path)
         self.province_assessors_path = Path(province_assessors_path) if province_assessors_path else None
         self.region_assessors_path = Path(region_assessors_path) if region_assessors_path else None
+        self.home_province = (home_province or "").strip()
         self.error = None
         try:
             centers_df = _read_excel(self.centers_path)
             _validate(centers_df, REQUIRED_CENTER_COLUMNS, "Assessment Centers Excel")
             self.center_rows = [_center_record(row) for _, row in centers_df.iterrows()]
             self.center_rows = [r for r in self.center_rows if r["center"] and r["qualification"]]
-            self.province_rows = _load_assessor_file(
+            # Both sheets are loaded and combined, but which one a row came from
+            # doesn't decide province-based vs. region-based — each row's own
+            # PROVINCE column does, compared against the Home Province setting.
+            # The region sheet covers the whole region (so it may include rows
+            # whose PROVINCE is the home province too); those are reclassified
+            # as province-based here rather than staying region-based just
+            # because of which file they were uploaded in.
+            province_file_rows = _load_assessor_file(
                 self.province_assessors_path,
-                "province",
+                self.home_province,
                 "Province-Based Competency Assessors Excel",
             )
             try:
-                self.region_rows = _load_assessor_file(
+                region_file_rows = _load_assessor_file(
                     self.region_assessors_path,
-                    "region",
+                    self.home_province,
                     "Region-Based Competency Assessors Excel",
                 )
             except FileNotFoundError:
-                self.region_rows = []
+                region_file_rows = []
+            self.assessor_rows = province_file_rows + region_file_rows
             self.loaded_at = datetime.now().isoformat(timespec="seconds")
         except Exception as exc:
             self.error = str(exc)
             raise
 
     def summary(self) -> dict:
+        province_rows = self.province_rows
+        region_rows = self.region_rows
         return {
             "centers_file": str(self.centers_path) if self.centers_path else "",
             "centers_file_name": self.centers_path.name if self.centers_path else "",
@@ -201,15 +217,14 @@ class ExcelRegistry:
                 if self.region_assessors_path and self.region_assessors_path.exists()
                 else ""
             ),
-            "assessors_file": str(self.province_assessors_path) if self.province_assessors_path else "",
-            "assessors_file_name": self.province_assessors_path.name if self.province_assessors_path else "",
+            "home_province": self.home_province,
             "center_records": len(self.center_rows),
-            "province_assessor_records": len(self.province_rows),
-            "region_assessor_records": len(self.region_rows),
+            "province_assessor_records": len(province_rows),
+            "region_assessor_records": len(region_rows),
             "assessor_records": len(self.assessor_rows),
             "unique_centers": len({row["center_key"] for row in self.center_rows}),
-            "unique_province_assessors": len({row["identity_key"] for row in self.province_rows}),
-            "unique_region_assessors": len({row["identity_key"] for row in self.region_rows}),
+            "unique_province_assessors": len({row["identity_key"] for row in province_rows}),
+            "unique_region_assessors": len({row["identity_key"] for row in region_rows}),
             "unique_assessors": len({row["identity_key"] for row in self.assessor_rows}),
             "loaded_at": self.loaded_at,
             "error": self.error,
@@ -412,16 +427,23 @@ def _center_record(row: pd.Series) -> dict:
     }
 
 
-def _assessor_record(row: pd.Series, source: str) -> dict:
+def _assessor_record(row: pd.Series, home_province: str) -> dict:
     name = normalize_text(row.get("NAME"))
     qualification = normalize_text(row.get("QUALIFICATION TITLE"))
     accreditation = _stringify(row.get("ACCREDITATION NUMBER"))
     birth = _stringify_date(row.get("DATE OF BIRTH"))
     address = _stringify(row.get("ADDRESS"))
+    province = _stringify(row.get("PROVINCE"))
+    # Province-based vs. region-based is now derived per row: an assessor whose
+    # PROVINCE column matches the configured home province is province-based;
+    # anything else — a different province, or a blank PROVINCE cell — is
+    # region-based.
+    home_key = normalize_key(home_province)
+    source = "province" if home_key and normalize_key(province) == home_key else "region"
     return {
         "source": source,
         "region": _stringify(row.get("REGION")),
-        "province": _stringify(row.get("PROVINCE")),
+        "province": province,
         "name": name,
         "name_key": normalize_key(name),
         "identity_key": identity_key(name, accreditation, birth, address),

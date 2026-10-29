@@ -234,7 +234,10 @@ def build_monitoring_workbook_range(
 
 
 def build_assessor_history_workbook(
-    assessment_log: list[dict], assessor_type: str = "", group_by: str = "month"
+    assessment_log: list[dict],
+    assessor_type: str = "",
+    group_by: str = "month",
+    home_province: str = "Southern Leyte",
 ) -> BytesIO:
     """One worksheet per month (or, with group_by="year", one worksheet per
     calendar year), laid out like the official TESDA-OP-CO-05-F35 "Assignment
@@ -251,7 +254,7 @@ def build_assessor_history_workbook(
     province_label = "REGION" if assessor_type == "region" else "PROVINCE"
     # Pre-filled for this office's own exports; only applies to the PROVINCE box —
     # a region-scoped export leaves the REGION box blank since this isn't a region name.
-    province_value = "" if assessor_type == "region" else "Southern Leyte"
+    province_value = "" if assessor_type == "region" else (home_province or "Southern Leyte")
 
     # Font family/sizes matched to the official TESDA-OP-CO-05-F35 "Assignment of
     # Assessors" form: Arial throughout, bold caps for the title and field labels,
