@@ -483,7 +483,7 @@ async function renderScheduler(extra) {
         `
         : `
           <select class="assessor-name-input" data-index="${index}">
-            <option value="">Select assessor</option>
+            <option value="">${list.length ? "Select assessor" : "No available assessors"}</option>
             ${optionList(list, row.assessor)}
             <option value="__custom__">+ Enter custom name…</option>
           </select>
@@ -679,8 +679,9 @@ async function renderScheduler(extra) {
   state.schedulerSearch = state.schedulerSearch || "";
   state.schedulerTab = state.schedulerTab || "entry";
   state.schedulerPage = state.schedulerPage || 1;
+  state.schedulerSort = state.schedulerSort || { by: "date", dir: "desc" };
   const tab = state.schedulerTab;
-  const filteredRecords = filterAssessments(state.assessments, state.schedulerSearch);
+  const filteredRecords = sortAssessments(filterAssessments(state.assessments, state.schedulerSearch), state.schedulerSort);
   const recordsPaged = paginate(filteredRecords, state.schedulerPage);
   state.schedulerPage = recordsPaged.page;
 
@@ -781,9 +782,20 @@ async function renderScheduler(extra) {
       <div class="card scheduler-records">
         <div class="records-head">
           <h3>Assessment records <span class="records-count">· ${state.assessments.length} total</span></h3>
-          <div class="records-search">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-            <input type="search" id="scheduler-search" placeholder="Search center, qualification, assessor, rep" value="${escapeHtml(state.schedulerSearch)}" />
+          <div class="row-actions" style="align-items:center; gap:10px; flex-wrap:wrap">
+            <div class="records-search">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+              <input type="search" id="scheduler-search" placeholder="Search center, qualification, assessor, rep" value="${escapeHtml(state.schedulerSearch)}" />
+            </div>
+            <div class="row-actions" style="align-items:center; gap:6px">
+              <span class="muted" style="font-size:0.78rem;text-transform:uppercase;letter-spacing:0.06em">Sort</span>
+              <button type="button" class="${state.schedulerSort.by === "date" ? "primary" : "ghost"}" id="sort-by-date" data-sort-by="date">
+                Date ${state.schedulerSort.by === "date" ? (state.schedulerSort.dir === "asc" ? "▲" : "▼") : ""}
+              </button>
+              <button type="button" class="${state.schedulerSort.by === "added" ? "primary" : "ghost"}" id="sort-by-added" data-sort-by="added">
+                Added ${state.schedulerSort.by === "added" ? (state.schedulerSort.dir === "asc" ? "▲" : "▼") : ""}
+              </button>
+            </div>
           </div>
         </div>
         <div id="scheduler-record-list">${assessmentCards(recordsPaged.pageItems, state.schedulerSearch ? "No assessments match your search." : "No assessments yet.")}</div>
@@ -815,7 +827,7 @@ async function renderScheduler(extra) {
   });
 
   function refreshSchedulerRecords() {
-    const filtered = filterAssessments(state.assessments, state.schedulerSearch);
+    const filtered = sortAssessments(filterAssessments(state.assessments, state.schedulerSearch), state.schedulerSort);
     const paged = paginate(filtered, state.schedulerPage);
     state.schedulerPage = paged.page;
     $("scheduler-record-list").innerHTML = assessmentCards(paged.pageItems, state.schedulerSearch ? "No assessments match your search." : "No assessments yet.");
@@ -832,6 +844,18 @@ async function renderScheduler(extra) {
     state.schedulerSearch = event.target.value;
     state.schedulerPage = 1;
     refreshSchedulerRecords();
+  });
+  document.querySelectorAll("[data-sort-by]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const by = btn.dataset.sortBy;
+      if (state.schedulerSort.by === by) {
+        state.schedulerSort = { by, dir: state.schedulerSort.dir === "asc" ? "desc" : "asc" };
+      } else {
+        state.schedulerSort = { by, dir: "desc" };
+      }
+      state.schedulerPage = 1;
+      renderScheduler({ prefill: state.prefill, assessment: editing });
+    });
   });
   refreshSchedulerRecords();
 
@@ -960,6 +984,20 @@ function filterAssessments(items, query) {
     ].join(" ").toLowerCase();
     return haystack.includes(q);
   });
+}
+
+function sortAssessments(items, sort) {
+  const by = sort?.by === "added" ? "added" : "date";
+  const dir = sort?.dir === "asc" ? 1 : -1;
+  const sorted = [...items];
+  sorted.sort((a, b) => {
+    const aKey = by === "added" ? (a.created_at || "") : (a.start_date || "");
+    const bKey = by === "added" ? (b.created_at || "") : (b.start_date || "");
+    if (aKey < bKey) return -1 * dir;
+    if (aKey > bKey) return 1 * dir;
+    return 0;
+  });
+  return sorted;
 }
 
 function assessmentCards(items, emptyMessage) {

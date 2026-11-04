@@ -806,9 +806,6 @@ def assessors():
     if source not in {None, "", "province", "region"}:
         return jsonify({"error": "Assessor source must be province or region."}), 400
     people = registry.assessors(qualification, source or None)
-    if qualification and not people:
-        people = registry.assessors(source=source or None)
-        return jsonify({"filtered": False, "assessors": people, "source": source or "all"})
     return jsonify({"filtered": bool(qualification), "assessors": people, "source": source or "all"})
 
 
