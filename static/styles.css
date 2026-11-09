@@ -720,3 +720,31 @@ th { color: var(--gold); font-weight: 500; font-size: 0.75rem; letter-spacing: 0
   .toast-stack { left: 12px; right: 12px; }
   .toast { min-width: 0; }
 }
+
+/* Records grid: mirrors the Monthly Report Excel layout */
+.records-grid { border: 1px solid var(--line, rgba(255,255,255,0.14)); }
+.records-grid th, .records-grid td { border: 1px solid var(--line, rgba(255,255,255,0.14)); padding: 10px 12px; vertical-align: middle; text-align: left; }
+.records-grid th { text-align: center; white-space: nowrap; background: rgba(255,255,255,0.04); }
+.records-grid td.c { text-align: center; }
+.records-grid tbody tr:nth-child(even) td { background: rgba(255,255,255,0.025); }
+.records-grid .records-actions { white-space: nowrap; }
+.records-grid .records-actions button { margin: 2px; }
+.records-grid { font-size: 0.85rem; }
+.records-grid th, .records-grid td { padding: 8px 8px; }
+.records-grid th { white-space: normal; line-height: 1.25; }
+.records-grid td:nth-child(6) { min-width: 190px; }
+.records-grid td:nth-child(6) > div { margin: 1px 0; }
+.records-grid td:nth-child(6) .muted { white-space: nowrap; }
+.records-grid td:nth-child(4) { min-width: 110px; }
+.records-grid .records-actions { display: table-cell; width: 1%; }
+.records-grid .records-actions button { display: block; width: 100%; margin: 3px 0; padding: 6px 10px; }
+.record-flash { animation: recordFlash 2.5s ease-out; }
+.records-grid tr.record-flash td { animation: recordFlash 2.5s ease-out; }
+@keyframes recordFlash { 0%, 40% { box-shadow: inset 0 0 0 2px var(--gold); background-color: rgba(94,234,212,0.18); } 100% { box-shadow: inset 0 0 0 2px transparent; } }
+
+/* Link-style buttons inside tables/cards: keep them aligned like plain text (buttons center by default) */
+td .linkish, th .linkish, .assessment-card .linkish, .record-card .linkish, .assessment-card-id .linkish {
+  text-align: inherit; font: inherit; line-height: inherit; color: var(--cyan);
+  display: inline; max-width: 100%; white-space: normal; padding: 0; margin: 0;
+}
+td .linkish:hover, .assessment-card .linkish:hover, .record-card .linkish:hover { text-decoration: underline; }

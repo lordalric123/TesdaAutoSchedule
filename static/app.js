@@ -680,6 +680,11 @@ async function renderScheduler(extra) {
   state.schedulerTab = state.schedulerTab || "entry";
   state.schedulerPage = state.schedulerPage || 1;
   state.schedulerSort = state.schedulerSort || { by: "date", dir: "desc" };
+  if (!state.schedulerLayout) {
+    let saved = "";
+    try { saved = localStorage.getItem("schedulerLayout") || ""; } catch (e) {}
+    state.schedulerLayout = saved === "cards" ? "cards" : "grid";
+  }
   const tab = state.schedulerTab;
   const filteredRecords = sortAssessments(filterAssessments(state.assessments, state.schedulerSearch), state.schedulerSort);
   const recordsPaged = paginate(filteredRecords, state.schedulerPage);
@@ -788,7 +793,10 @@ async function renderScheduler(extra) {
               <input type="search" id="scheduler-search" placeholder="Search center, qualification, assessor, rep" value="${escapeHtml(state.schedulerSearch)}" />
             </div>
             <div class="row-actions" style="align-items:center; gap:6px">
-              <span class="muted" style="font-size:0.78rem;text-transform:uppercase;letter-spacing:0.06em">Sort</span>
+              <span class="muted" style="font-size:0.78rem;text-transform:uppercase;letter-spacing:0.06em">View</span>
+              <button type="button" class="${state.schedulerLayout === "grid" ? "primary" : "ghost"}" data-layout="grid">Table</button>
+              <button type="button" class="${state.schedulerLayout === "cards" ? "primary" : "ghost"}" data-layout="cards">Cards</button>
+              <span class="muted" style="font-size:0.78rem;text-transform:uppercase;letter-spacing:0.06em;margin-left:8px">Sort</span>
               <button type="button" class="${state.schedulerSort.by === "date" ? "primary" : "ghost"}" id="sort-by-date" data-sort-by="date">
                 Date ${state.schedulerSort.by === "date" ? (state.schedulerSort.dir === "asc" ? "▲" : "▼") : ""}
               </button>
@@ -798,7 +806,7 @@ async function renderScheduler(extra) {
             </div>
           </div>
         </div>
-        <div id="scheduler-record-list">${assessmentCards(recordsPaged.pageItems, state.schedulerSearch ? "No assessments match your search." : "No assessments yet.")}</div>
+        <div id="scheduler-record-list">${recordsList(recordsPaged.pageItems, state.schedulerSearch ? "No assessments match your search." : "No assessments yet.")}</div>
         <div id="scheduler-record-pagination">${paginationControls("scheduler", recordsPaged.page, recordsPaged.totalPages, filteredRecords.length)}</div>
       </div>
       </div>
@@ -830,7 +838,7 @@ async function renderScheduler(extra) {
     const filtered = sortAssessments(filterAssessments(state.assessments, state.schedulerSearch), state.schedulerSort);
     const paged = paginate(filtered, state.schedulerPage);
     state.schedulerPage = paged.page;
-    $("scheduler-record-list").innerHTML = assessmentCards(paged.pageItems, state.schedulerSearch ? "No assessments match your search." : "No assessments yet.");
+    $("scheduler-record-list").innerHTML = recordsList(paged.pageItems, state.schedulerSearch ? "No assessments match your search." : "No assessments yet.");
     $("scheduler-record-pagination").innerHTML = paginationControls("scheduler", paged.page, paged.totalPages, filtered.length);
     bindRecordButtons();
     bindPaginationControls(
@@ -838,12 +846,28 @@ async function renderScheduler(extra) {
       () => { state.schedulerPage -= 1; refreshSchedulerRecords(); },
       () => { state.schedulerPage += 1; refreshSchedulerRecords(); }
     );
+    if (state.focusRecordId) {
+      const target = document.querySelector(`[data-record-id="${CSS.escape(String(state.focusRecordId))}"]`);
+      state.focusRecordId = null;
+      if (target) {
+        target.scrollIntoView({ block: "center", behavior: "smooth" });
+        target.classList.add("record-flash");
+        setTimeout(() => target.classList.remove("record-flash"), 2500);
+      }
+    }
   }
 
   $("scheduler-search").addEventListener("input", (event) => {
     state.schedulerSearch = event.target.value;
     state.schedulerPage = 1;
     refreshSchedulerRecords();
+  });
+  document.querySelectorAll("[data-layout]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.schedulerLayout = btn.dataset.layout;
+      try { localStorage.setItem("schedulerLayout", state.schedulerLayout); } catch (e) {}
+      renderScheduler({ prefill: state.prefill, assessment: editing });
+    });
   });
   document.querySelectorAll("[data-sort-by]").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -965,6 +989,42 @@ function assessorChipLabel(item) {
   return list[0].assessor_type === "region" ? "Region-Based" : "Province-Based";
 }
 
+function assessorLink(a) {
+  return `<button type="button" class="linkish" data-goto-assessor="${escapeHtml(a.name)}" title="Open in Assessor Directory">${escapeHtml(a.name)}</button>`;
+}
+
+function qualLink(q) {
+  return `<button type="button" class="linkish" data-goto-qual="${escapeHtml(q)}" title="Open in Qualification Finder">${escapeHtml(q)}</button>`;
+}
+
+async function goToAssessor(name) {
+  const wanted = String(name || "").trim().toLowerCase();
+  let matches = [];
+  try {
+    const data = await api(`/api/assessor-directory?q=${encodeURIComponent(name)}&source=`);
+    matches = data.assessors || [];
+  } catch (e) { /* fall through to a plain search */ }
+  const exact = matches.filter((a) => [a.name, a.display_name].some((n) => n && n.trim().toLowerCase() === wanted));
+  const open = exact.length ? exact : matches.slice(0, 1);
+  const expanded = {};
+  open.forEach((a) => { expanded[directoryAssessorKey(a)] = true; });
+  state.directory = { query: name, source: "", expanded };
+  state.focusDirectoryKey = open.length ? directoryAssessorKey(open[0]) : null;
+  switchView("directory");
+}
+
+function goToQualification(title) {
+  state.finder = { query: "", selected: title, source: state.finder.source || "province", picked: null };
+  switchView("finder");
+}
+
+document.addEventListener("click", (event) => {
+  const assessorBtn = event.target.closest("[data-goto-assessor]");
+  if (assessorBtn) { goToAssessor(assessorBtn.dataset.gotoAssessor); return; }
+  const qualBtn = event.target.closest("[data-goto-qual]");
+  if (qualBtn) goToQualification(qualBtn.dataset.gotoQual);
+});
+
 function assessorsSummary(item) {
   return itemAssessors(item)
     .map((a) => `${a.name} (${a.assessor_type === "region" ? "Region-Based" : "Province-Based"})`)
@@ -1003,11 +1063,11 @@ function sortAssessments(items, sort) {
 function assessmentCards(items, emptyMessage) {
   if (!items.length) return `<p class="empty">${escapeHtml(emptyMessage || "No assessments yet.")}</p>`;
   return `<div class="assessment-list">${items.map((item) => `
-    <article class="assessment-card ${item.duration_type === "single" ? "is-single" : ""}">
+    <article class="assessment-card ${item.duration_type === "single" ? "is-single" : ""}" data-record-id="${item.id}">
       <div class="assessment-card-top">
         <div class="assessment-card-id">
           <h4>${escapeHtml(item.assessment_center)}</h4>
-          <p>${escapeHtml(item.qualification)}</p>
+          <p>${qualLink(item.qualification)}</p>
         </div>
         <div class="assessment-card-date">${escapeHtml(item.date_label)}</div>
       </div>
@@ -1020,7 +1080,7 @@ function assessmentCards(items, emptyMessage) {
       <dl class="assessment-card-grid">
         <div class="span-2">
           <dt>Assessors</dt>
-          <dd>${escapeHtml(assessorsSummary(item))}</dd>
+          <dd>${itemAssessors(item).map((a) => `${assessorLink(a)} <span class="muted">(${a.assessor_type === "region" ? "Region-Based" : "Province-Based"})</span>`).join("; ") || "—"}</dd>
         </div>
         <div>
           <dt>TESDA Representative</dt>
@@ -1044,6 +1104,52 @@ function assessmentCards(items, emptyMessage) {
       </div>
     </article>
   `).join("")}</div>`;
+}
+
+function shortDate(iso) {
+  const [y, m, d] = String(iso).split("-");
+  return y && m && d ? `${Number(m)}/${Number(d)}/${y}` : String(iso || "");
+}
+
+function recordsList(items, emptyMessage) {
+  return state.schedulerLayout === "cards" ? assessmentCards(items, emptyMessage) : recordsGrid(items, emptyMessage);
+}
+
+function recordsGrid(items, emptyMessage) {
+  if (!items.length) return `<p class="empty">${escapeHtml(emptyMessage || "No assessments yet.")}</p>`;
+  const rows = items.map((item) => {
+    const assessors = itemAssessors(item)
+      .map((a) => `<div>${assessorLink(a)} <span class="muted">(${a.assessor_type === "region" ? "Region" : "Province"})</span></div>`)
+      .join("") || `<span class="muted">—</span>`;
+    const approved = (item.approved_date_list || []).map((d) => `<div>${escapeHtml(shortDate(d))}</div>`).join("") || "—";
+    const edited = (item.approved_dates || []).some((p) => p.manual) ? ` <span class="chip gold">Edited</span>` : "";
+    return `
+      <tr data-record-id="${item.id}">
+        <td class="c">${approved}${edited}</td>
+        <td><b>${escapeHtml(item.assessment_center)}</b></td>
+        <td>${qualLink(item.qualification)}</td>
+        <td class="c">${escapeHtml(item.date_label)}</td>
+        <td class="c">${escapeHtml(item.pax)}</td>
+        <td>${assessors}</td>
+        <td>${escapeHtml(item.tesda_representative || "—")}</td>
+        <td class="muted">${escapeHtml(item.remarks || "")}</td>
+        <td class="records-actions">
+          <button class="ghost" data-edit="${item.id}">Edit</button>
+          <button class="danger" data-delete="${item.id}">Delete</button>
+        </td>
+      </tr>`;
+  }).join("");
+  return `
+    <div class="table-wrap desktop-table">
+      <table class="records-grid">
+        <thead><tr>
+          <th>Approved Dates</th><th>Assessment Centers</th><th>Qualifications</th><th>Assessment Date</th>
+          <th>No. of Pax</th><th>Assessor</th><th>TESDA Representative</th><th>Remarks</th><th></th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <div class="mobile-records">${assessmentCards(items, emptyMessage)}</div>`;
 }
 
 function assessmentTable(items) {
@@ -1071,6 +1177,22 @@ function assessmentTable(items) {
       `).join("")}
     </tbody>
   </table>`;
+}
+
+// Jump to an assessment in Scheduler -> Records: switch tab, clear the search, land on the
+// page that holds it (using the current sort), then scroll it to the centre and flash it.
+async function openRecord(id) {
+  try { state.assessments = await api("/api/assessments"); } catch (e) { /* fall back to what we have */ }
+  state.editingId = null;
+  state.prefill = null;
+  state.schedulerTab = "records";
+  state.schedulerSearch = "";
+  state.schedulerSort = state.schedulerSort || { by: "date", dir: "desc" };
+  const ordered = sortAssessments(state.assessments, state.schedulerSort);
+  const index = ordered.findIndex((item) => item.id === id);
+  state.schedulerPage = index >= 0 ? Math.floor(index / PAGE_SIZE) + 1 : 1;
+  state.focusRecordId = id;
+  switchView("scheduler");
 }
 
 function bindRecordButtons() {
@@ -1181,7 +1303,7 @@ function showDay(iso) {
       <h3 style="margin-top:8px">${escapeHtml(event.title)}</h3>
       <p>${escapeHtml(event.detail)}</p>
       <p class="muted">${escapeHtml(a.assessment_center)} · ${escapeHtml(a.qualification)} · ${escapeHtml(a.date_label)}</p>
-      <button class="ghost" data-open="${a.id}">View / edit assessment</button>
+      <button class="ghost" data-open="${a.id}">View assessment</button>
     </div>`;
   }).join("");
   openModal(`
@@ -1198,9 +1320,7 @@ function showDay(iso) {
   document.querySelectorAll("[data-open]").forEach((btn) => {
     btn.addEventListener("click", () => {
       closeModal();
-      state.editingId = btn.dataset.open;
-      state.schedulerTab = "entry";
-      switchView("scheduler");
+      openRecord(btn.dataset.open);
     });
   });
 }
@@ -1274,9 +1394,7 @@ function finderAssessorCardHtml(a, picked, expanded) {
       </dl>` : ""}
       ${isExpanded && a.qualifications && a.qualifications.length ? `<p class="muted" style="font-size:0.8rem; margin-top:8px">Accredited for: ${escapeHtml(a.qualifications.join("; "))}</p>` : ""}
       <div class="row-actions" style="margin-top:10px">
-        <button class="ghost" data-pick-assessor="${escapeHtml(a.name)}" data-pick-assessor-type="${escapeHtml(assessorType)}">
-          ${isPicked ? "Selected ✓" : "Use assessor"}
-        </button>
+        <button type="button" class="ghost" data-goto-assessor="${escapeHtml(a.name)}">View in Assessor Directory</button>
       </div>
     </div>
   `;
@@ -1404,14 +1522,6 @@ async function renderFinder() {
       renderFinder();
     };
   });
-  document.querySelectorAll("[data-pick-assessor]").forEach((btn) => {
-    btn.onclick = () => {
-      state.finder.picked.assessor = btn.dataset.pickAssessor;
-      state.finder.picked.assessor_type = btn.dataset.pickAssessorType || "province";
-      toast(`Assessor set: ${state.finder.picked.assessor}`);
-      renderFinder();
-    };
-  });
   $("create-from-finder")?.addEventListener("click", () => {
     state.editingId = null;
     state.prefill = picked;
@@ -1526,12 +1636,23 @@ async function renderDirectory() {
     </div>
   `;
 
+  if (state.focusDirectoryKey) {
+    const toggle = document.querySelector(`.directory-assessor-toggle[data-assessor-key="${CSS.escape(state.focusDirectoryKey)}"]`);
+    const card = toggle && toggle.closest(".task");
+    state.focusDirectoryKey = null;
+    if (card) {
+      card.scrollIntoView({ block: "center", behavior: "smooth" });
+      card.classList.add("record-flash");
+      setTimeout(() => card.classList.remove("record-flash"), 2500);
+    }
+  }
+
   const box = $("directory-q");
   box.addEventListener("input", debounce(() => {
     state.directory.query = box.value;
     renderDirectory();
   }, 250));
-  box.focus();
+  box.focus({ preventScroll: true });
   box.selectionStart = box.selectionEnd = box.value.length;
   $("directory-clear").onclick = () => {
     state.directory = { query: "", source: state.directory.source, expanded: {} };
@@ -1636,21 +1757,21 @@ async function renderHistory() {
       <thead><tr><th>Date</th>${data.qualification ? "" : "<th>Qualification</th>"}<th>Assessment Center</th><th>Assessor(s)</th><th>Pax</th></tr></thead>
       <tbody>
         ${logPaged.pageItems.map((item) => `
-          <tr class="log-row" data-open-assessment="${item.id}" style="cursor:pointer">
-            <td>${escapeHtml(item.date_label)}</td>
-            ${data.qualification ? "" : `<td>${escapeHtml(item.qualification)}</td>`}
+          <tr class="log-row">
+            <td><button type="button" class="linkish" data-open-assessment="${item.id}" title="Open in Assessment Scheduler records">${escapeHtml(item.date_label)}</button></td>
+            ${data.qualification ? "" : `<td>${qualLink(item.qualification)}</td>`}
             <td>${escapeHtml(item.assessment_center)}</td>
-            <td>${item.assessors.map((a) => `${escapeHtml(a.name)} <span class="muted">(${a.assessor_type === "region" ? "Region" : "Province"})</span>`).join("<br>")}</td>
+            <td>${item.assessors.map((a) => `${assessorLink(a)} <span class="muted">(${a.assessor_type === "region" ? "Region" : "Province"})</span>`).join("<br>")}</td>
             <td>${item.pax}</td>
           </tr>
         `).join("")}
       </tbody>
     </table></div>
     <div class="mobile-records">${logPaged.pageItems.map((item) => `
-      <article class="record-card" data-open-assessment="${item.id}" style="cursor:pointer">
-        <h4>${escapeHtml(item.date_label)}</h4>
-        <div class="muted">${data.qualification ? "" : `${escapeHtml(item.qualification)} · `}${escapeHtml(item.assessment_center)} · ${item.pax} pax</div>
-        <div>${item.assessors.map((a) => `${escapeHtml(a.name)} (${a.assessor_type === "region" ? "Region" : "Province"})`).join(", ")}</div>
+      <article class="record-card">
+        <h4><button type="button" class="linkish" data-open-assessment="${item.id}">${escapeHtml(item.date_label)}</button></h4>
+        <div class="muted">${data.qualification ? "" : `${qualLink(item.qualification)} · `}${escapeHtml(item.assessment_center)} · ${item.pax} pax</div>
+        <div>${item.assessors.map((a) => `${assessorLink(a)} (${a.assessor_type === "region" ? "Region" : "Province"})`).join(", ")}</div>
       </article>
     `).join("")}</div>
     <div id="history-log-pagination">${paginationControls("history-log", logPaged.page, logPaged.totalPages, data.assessment_log.length)}</div>` : `<p class="empty">No recorded assessments yet.</p>`}
@@ -1723,9 +1844,7 @@ async function renderHistory() {
   });
   document.querySelectorAll("[data-open-assessment]").forEach((el) => {
     el.addEventListener("click", () => {
-      state.editingId = el.dataset.openAssessment;
-      state.schedulerTab = "entry";
-      switchView("scheduler");
+      openRecord(el.dataset.openAssessment);
     });
   });
   bindPaginationControls(
