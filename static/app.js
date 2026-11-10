@@ -1055,6 +1055,11 @@ function sortAssessments(items, sort) {
     const bKey = by === "added" ? (b.created_at || "") : (b.start_date || "");
     if (aKey < bKey) return -1 * dir;
     if (aKey > bKey) return 1 * dir;
+    // Same date: the most recently added record counts as the latest (same direction as the sort).
+    const aTie = by === "added" ? (a.start_date || "") : (a.created_at || "");
+    const bTie = by === "added" ? (b.start_date || "") : (b.created_at || "");
+    if (aTie < bTie) return -1 * dir;
+    if (aTie > bTie) return 1 * dir;
     return 0;
   });
   return sorted;

@@ -257,6 +257,44 @@ def normalize_assessors(payload: dict, existing: dict | None = None) -> list[dic
     return assessors
 
 
+_TYPE_MAP_CACHE: dict = {"stamp": None, "map": {}}
+
+
+def _current_type_map() -> dict[str, str]:
+    """name -> 'province'/'region' using the Excel data as it stands now (province wins)."""
+    stamp = registry.loaded_at
+    if _TYPE_MAP_CACHE["stamp"] != stamp:
+        mapping: dict[str, str] = {}
+        for row in registry.assessor_rows:
+            key = " ".join(row["name"].casefold().split())
+            if row["source"] == "province":
+                mapping[key] = "province"
+            else:
+                mapping.setdefault(key, "region")
+        _TYPE_MAP_CACHE["stamp"] = stamp
+        _TYPE_MAP_CACHE["map"] = mapping
+    return _TYPE_MAP_CACHE["map"]
+
+
+def _reclassify_assessors(assessors: list[dict]) -> list[dict]:
+    """Assessments remember the type an assessor had when they were saved. Re-check each
+    name against the current Excel data (PROVINCE column vs. home province) so old records
+    never show a province-based assessor as region-based, or vice versa."""
+    type_map = _current_type_map()
+    result: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for entry in assessors:
+        name = entry.get("name", "")
+        current = type_map.get(" ".join(name.casefold().split()))
+        assessor_type = current or entry.get("assessor_type") or "province"
+        key = (" ".join(name.casefold().split()), assessor_type)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append({**entry, "assessor_type": assessor_type})
+    return result
+
+
 def decorate(assessment: dict) -> dict:
     item = dict(assessment)
     if not item.get("assessors"):
@@ -266,8 +304,9 @@ def decorate(assessment: dict) -> dict:
                 "assessor_type": _assessor_type_value(item),
             }
         ]
-    item.setdefault("assessor", item["assessors"][0]["name"])
-    item.setdefault("assessor_type", item["assessors"][0]["assessor_type"])
+    item["assessors"] = _reclassify_assessors(item["assessors"])
+    item["assessor"] = item["assessors"][0]["name"]
+    item["assessor_type"] = item["assessors"][0]["assessor_type"]
     item["assessor_type_label"] = "Region-Based" if item["assessor_type"] == "region" else "Province-Based"
     item["assessors_label"] = "; ".join(
         f"{a['name']} ({'Region-Based' if a['assessor_type'] == 'region' else 'Province-Based'})"
@@ -1136,7 +1175,7 @@ def reports():
             or query in item["tesda_representative"].casefold()
             or query in (item.get("remarks") or "").casefold()
         ]
-    items.sort(key=lambda x: x["start_date"])
+    items.sort(key=lambda x: (x["start_date"], x.get("created_at") or ""))
     return jsonify({"year": year, "month": month, "items": items})
 
 
@@ -1156,7 +1195,7 @@ def export_reports():
     year = int(request.args.get("year", today().year))
     month = int(request.args.get("month", today().month))
     items = [decorate(item) for item in assessments_store.read() if overlaps_month(item, year, month)]
-    items.sort(key=lambda x: x["start_date"])
+    items.sort(key=lambda x: (x["start_date"], x.get("created_at") or ""))
     buffer = build_monitoring_workbook(year, month, items)
     filename = f"Assessment_Schedule_{date(year, month, 1).strftime('%B_%Y')}.xlsx"
     return send_file(

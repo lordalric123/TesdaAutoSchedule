@@ -224,7 +224,8 @@ def build_monitoring_workbook_range(
             suffix += 1
         used_titles.add(title)
         sheet = workbook.create_sheet(title=title)
-        month_items = sorted(buckets[key], key=lambda x: x["start_date"])
+        # Same date: earliest-added first (the on-screen Records list is the other way round)
+        month_items = sorted(buckets[key], key=lambda x: (x["start_date"], x.get("created_at") or ""))
         _write_monitoring_sheet(sheet, month_label, month_items)
 
     buffer = BytesIO()
@@ -402,7 +403,7 @@ def build_assessor_history_workbook(
             for item in groups[key]:
                 grouped.setdefault(item.get("qualification") or "Unspecified Qualification", []).append(item)
             for entries in grouped.values():
-                entries.sort(key=lambda x: x["start_date"])
+                entries.sort(key=lambda x: (x["start_date"], x.get("created_at") or ""))
             ordered_qualifications = sorted(grouped.keys(), key=str.casefold)
 
             for qualification in ordered_qualifications:
