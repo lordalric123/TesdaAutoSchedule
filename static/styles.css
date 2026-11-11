@@ -748,3 +748,5 @@ td .linkish, th .linkish, .assessment-card .linkish, .record-card .linkish, .ass
   display: inline; max-width: 100%; white-space: normal; padding: 0; margin: 0;
 }
 td .linkish:hover, .assessment-card .linkish:hover, .record-card .linkish:hover { text-decoration: underline; }
+.directory-qual-row .linkish { text-align: left; font: inherit; font-weight: 600; color: var(--cyan); padding: 0; display: inline; }
+.directory-qual-row .linkish:hover { text-decoration: underline; }

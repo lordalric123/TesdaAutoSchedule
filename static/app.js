@@ -460,6 +460,12 @@ async function renderScheduler(extra) {
     api(`/api/assessors?source=region${qualQuery}`),
   ]);
   const assessorsBySource = { province: provinceAssessors, region: regionAssessors };
+  // Exception list: every assessor in each source regardless of qualification, so an
+  // assessor missing from the qualification's list (outdated records) can still be picked by exact name.
+  const [allProvince, allRegion] = qualQuery
+    ? await Promise.all([api("/api/assessors?source=province"), api("/api/assessors?source=region")])
+    : [provinceAssessors, regionAssessors];
+  const allBySource = { province: allProvince.assessors || [], region: allRegion.assessors || [] };
 
   // A saved assessor whose name isn't in the loaded registry (e.g. a previously entered
   // custom name, or one typed before the Excel file was refreshed) should still show as
@@ -472,12 +478,16 @@ async function renderScheduler(extra) {
   });
 
   function assessorRowsHtml() {
-    return assessorRows.map((row, index) => {
+    const datalists = ["province", "region"].map((src) => `
+      <datalist id="all-assessors-${src}">
+        ${allBySource[src].map((p) => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.display_name && p.display_name !== p.name ? p.display_name : "")}</option>`).join("")}
+      </datalist>`).join("");
+    return datalists + assessorRows.map((row, index) => {
       const list = assessorsBySource[row.assessor_type].assessors;
       const nameSlot = row.custom
         ? `
           <div class="assessor-custom-wrap">
-            <input type="text" class="assessor-custom-input" data-index="${index}" placeholder="Type assessor name" value="${escapeHtml(row.assessor)}" />
+            <input type="text" class="assessor-custom-input" data-index="${index}" list="all-assessors-${row.assessor_type}" placeholder="Exception: search any assessor or type exact name" value="${escapeHtml(row.assessor)}" autocomplete="off" />
             <button type="button" class="linkish assessor-use-list" data-index="${index}">Use list</button>
           </div>
         `
@@ -485,7 +495,7 @@ async function renderScheduler(extra) {
           <select class="assessor-name-input" data-index="${index}">
             <option value="">${list.length ? "Select assessor" : "No available assessors"}</option>
             ${optionList(list, row.assessor)}
-            <option value="__custom__">+ Enter custom name…</option>
+            <option value="__custom__">+ Not listed? Choose any assessor (exception)…</option>
           </select>
         `;
       return `
@@ -1013,8 +1023,8 @@ async function goToAssessor(name) {
   switchView("directory");
 }
 
-function goToQualification(title) {
-  state.finder = { query: "", selected: title, source: state.finder.source || "province", picked: null };
+function goToQualification(title, source) {
+  state.finder = { query: "", selected: title, source: source || state.finder.source || "province", picked: null };
   switchView("finder");
 }
 
@@ -1022,7 +1032,7 @@ document.addEventListener("click", (event) => {
   const assessorBtn = event.target.closest("[data-goto-assessor]");
   if (assessorBtn) { goToAssessor(assessorBtn.dataset.gotoAssessor); return; }
   const qualBtn = event.target.closest("[data-goto-qual]");
-  if (qualBtn) goToQualification(qualBtn.dataset.gotoQual);
+  if (qualBtn) goToQualification(qualBtn.dataset.gotoQual, qualBtn.dataset.gotoSource);
 });
 
 function assessorsSummary(item) {
@@ -1116,6 +1126,24 @@ function shortDate(iso) {
   return y && m && d ? `${Number(m)}/${Number(d)}/${y}` : String(iso || "");
 }
 
+// Same compression as the Monthly Report export: contiguous runs become M/D-D/YYYY,
+// skip-day lists are spelled out so gaps stay visible.
+function compactDates(isoDates) {
+  const list = Array.from(new Set((isoDates || []).filter(Boolean))).sort();
+  if (!list.length) return "";
+  const p = list.map((v) => { const [y, m, d] = String(v).split("-").map(Number); return { y, m, d, t: Date.UTC(y, m - 1, d) }; });
+  const first = p[0], last = p[p.length - 1];
+  if (p.length === 1) return `${first.m}/${first.d}/${first.y}`;
+  const contiguous = p.every((x, i) => i === 0 || (x.t - p[i - 1].t) / 86400000 === 1);
+  if (contiguous) {
+    if (first.m === last.m && first.y === last.y) return `${first.m}/${first.d}-${last.d}/${last.y}`;
+    if (first.y === last.y) return `${first.m}/${first.d}-${last.m}/${last.d}, ${last.y}`;
+    return `${first.m}/${first.d}/${first.y}-${last.m}/${last.d}/${last.y}`;
+  }
+  if (p.every((x) => x.m === first.m && x.y === first.y)) return `${first.m}/${p.map((x) => x.d).join(", ")}/${first.y}`;
+  return p.map((x) => `${x.m}/${x.d}/${x.y}`).join(", ");
+}
+
 function recordsList(items, emptyMessage) {
   return state.schedulerLayout === "cards" ? assessmentCards(items, emptyMessage) : recordsGrid(items, emptyMessage);
 }
@@ -1126,14 +1154,14 @@ function recordsGrid(items, emptyMessage) {
     const assessors = itemAssessors(item)
       .map((a) => `<div>${assessorLink(a)} <span class="muted">(${a.assessor_type === "region" ? "Region" : "Province"})</span></div>`)
       .join("") || `<span class="muted">—</span>`;
-    const approved = (item.approved_date_list || []).map((d) => `<div>${escapeHtml(shortDate(d))}</div>`).join("") || "—";
+    const approved = escapeHtml(compactDates(item.approved_date_list || [])) || "—";
     const edited = (item.approved_dates || []).some((p) => p.manual) ? ` <span class="chip gold">Edited</span>` : "";
     return `
       <tr data-record-id="${item.id}">
         <td class="c">${approved}${edited}</td>
         <td><b>${escapeHtml(item.assessment_center)}</b></td>
         <td>${qualLink(item.qualification)}</td>
-        <td class="c">${escapeHtml(item.date_label)}</td>
+        <td class="c">${escapeHtml(compactDates(item.assessment_dates && item.assessment_dates.length ? item.assessment_dates : [item.start_date, item.end_date]) || item.date_label)}</td>
         <td class="c">${escapeHtml(item.pax)}</td>
         <td>${assessors}</td>
         <td>${escapeHtml(item.tesda_representative || "—")}</td>
@@ -1583,7 +1611,7 @@ function directoryAssessorCardHtml(a, expanded) {
           ${qualDetails.map((q) => `
             <div class="directory-qual-row">
               <div class="row-actions" style="gap:6px; align-items:center">
-                <b>${escapeHtml(q.qualification)}</b>
+                <b><button type="button" class="linkish" data-goto-qual="${escapeHtml(q.qualification)}" ${q.source ? `data-goto-source="${escapeHtml(q.source)}"` : ""} title="Open in Qualification Finder">${escapeHtml(q.qualification)}</button></b>
                 ${q.source ? `<span class="chip ${q.source === "region" ? "gold" : ""}">${q.source === "region" ? "Region" : "Province"}</span>` : ""}
               </div>
               <span class="muted">

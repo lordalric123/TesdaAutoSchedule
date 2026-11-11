@@ -42,12 +42,7 @@ def compact_dates_list(iso_dates: list[str]) -> str:
 def compact_assessors(assessors: list[dict]) -> str:
     if not assessors:
         return ""
-    labels = [
-        f"{a.get('name', '')} ({'Region' if a.get('assessor_type') == 'region' else 'Province'})"
-        for a in assessors
-        if a.get("name")
-    ]
-    return "\n".join(labels)
+    return "\n".join(a["name"] for a in assessors if a.get("name"))
 
 
 def _write_monitoring_sheet(sheet, month_label: str, items: list[dict]) -> None:
