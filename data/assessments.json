@@ -84860,7 +84860,7 @@
     "qualification": "Photography NC II",
     "duration_type": "continuous",
     "start_date": "2026-11-13",
-    "end_date": "2026-11-15",
+    "end_date": "2026-11-16",
     "pax": 40,
     "assessors": [
       {
@@ -84875,7 +84875,8 @@
     "assessment_dates": [
       "2026-11-13",
       "2026-11-14",
-      "2026-11-15"
+      "2026-11-15",
+      "2026-11-16"
     ],
     "approved_dates": [
       {
@@ -84891,6 +84892,11 @@
       {
         "assessment_date": "2026-11-15",
         "date": "2026-11-13",
+        "manual": true
+      },
+      {
+        "assessment_date": "2026-11-16",
+        "date": "2026-11-14",
         "manual": true
       }
     ],
@@ -84909,6 +84915,11 @@
         "assessment_date": "2026-11-15",
         "date": "2026-11-13",
         "manual": true
+      },
+      {
+        "assessment_date": "2026-11-16",
+        "date": "2026-11-14",
+        "manual": true
       }
     ],
     "results_reminder_dates": [
@@ -84923,10 +84934,14 @@
       {
         "assessment_date": "2026-11-15",
         "date": "2026-11-16"
+      },
+      {
+        "assessment_date": "2026-11-16",
+        "date": "2026-11-17"
       }
     ],
     "created_at": "2026-11-11T17:26:11",
-    "updated_at": "2026-11-11T17:26:11"
+    "updated_at": "2026-11-12T17:35:35"
   },
   {
     "id": "51d80c09-a2fc-4c36-a10c-caa247f90d28",
@@ -85238,5 +85253,79 @@
     ],
     "created_at": "2026-11-11T17:46:59",
     "updated_at": "2026-11-11T17:46:59"
+  },
+  {
+    "id": "b64527fb-390a-48aa-87c3-d62cdaf40c1a",
+    "assessment_center": "STC TECHNICAL TRAINING INSTITUTE INC.",
+    "qualification": "Electrical Installation and Maintenance NC II",
+    "duration_type": "continuous",
+    "start_date": "2026-11-14",
+    "end_date": "2026-11-16",
+    "pax": 30,
+    "assessors": [
+      {
+        "name": "Orlando Coquilla Paas Sr.",
+        "assessor_type": "province"
+      }
+    ],
+    "assessor": "Orlando Coquilla Paas Sr.",
+    "assessor_type": "province",
+    "tesda_representative": "Kirstine Daves A. Egrubay",
+    "remarks": "",
+    "assessment_dates": [
+      "2026-11-14",
+      "2026-11-15",
+      "2026-11-16"
+    ],
+    "approved_dates": [
+      {
+        "assessment_date": "2026-11-14",
+        "date": "2026-11-12",
+        "manual": false
+      },
+      {
+        "assessment_date": "2026-11-15",
+        "date": "2026-11-13",
+        "manual": true
+      },
+      {
+        "assessment_date": "2026-11-16",
+        "date": "2026-11-14",
+        "manual": true
+      }
+    ],
+    "schedule_reminder_dates": [
+      {
+        "assessment_date": "2026-11-14",
+        "date": "2026-11-12",
+        "manual": false
+      },
+      {
+        "assessment_date": "2026-11-15",
+        "date": "2026-11-13",
+        "manual": true
+      },
+      {
+        "assessment_date": "2026-11-16",
+        "date": "2026-11-14",
+        "manual": true
+      }
+    ],
+    "results_reminder_dates": [
+      {
+        "assessment_date": "2026-11-14",
+        "date": "2026-11-15"
+      },
+      {
+        "assessment_date": "2026-11-15",
+        "date": "2026-11-16"
+      },
+      {
+        "assessment_date": "2026-11-16",
+        "date": "2026-11-17"
+      }
+    ],
+    "created_at": "2026-11-12T17:14:11",
+    "updated_at": "2026-11-12T17:14:11"
   }
 ]
