@@ -23,7 +23,7 @@ from monitoring_export import (
     build_monitoring_workbook,
     build_monitoring_workbook_range,
 )
-from storage import JsonStore
+from storage import JsonStore, push_dir as push_files_to_db, sync_on_startup as sync_files_on_startup
 
 ROOT = Path(__file__).resolve().parent
 # The bundled/default Excel files shipped with the code — used only to seed a fresh
@@ -84,6 +84,10 @@ def seed_excel_dir() -> None:
 
 
 seed_excel_dir()
+try:
+    sync_files_on_startup(DATA_DIR, ["excel", "branding"])
+except Exception as _exc:  # database unreachable: fall back to whatever is on disk
+    print(f"File sync from database failed: {_exc}")
 
 
 DEFAULT_THEME = {
@@ -736,6 +740,7 @@ def upload_logo():
         existing.unlink(missing_ok=True)
     dest = BRANDING_DIR / f"logo{suffix}"
     uploaded.save(dest)
+    push_files_to_db(DATA_DIR, "branding")
 
     settings = normalize_settings()
     settings["branding"]["logo_filename"] = dest.name
@@ -750,6 +755,7 @@ def reset_logo():
     if BRANDING_DIR.exists():
         for existing in BRANDING_DIR.glob("logo.*"):
             existing.unlink(missing_ok=True)
+    push_files_to_db(DATA_DIR, "branding")
     settings["branding"]["logo_filename"] = ""
     settings["branding"]["logo_version"] = ""
     settings_store.write(settings)
@@ -795,6 +801,7 @@ def upload_excel():
     dest = EXCEL_DIR / dest_name
     EXCEL_DIR.mkdir(parents=True, exist_ok=True)
     uploaded.save(dest)
+    push_files_to_db(DATA_DIR, "excel")
     settings = normalize_settings()
     if kind == "centers":
         settings["centers_path"] = str(dest)
@@ -1353,6 +1360,8 @@ def import_backup():
                 existing.unlink(missing_ok=True)
             shutil.copyfile(logo_candidate, BRANDING_DIR / logo_candidate.name)
             break
+        push_files_to_db(DATA_DIR, "excel")
+        push_files_to_db(DATA_DIR, "branding")
 
         imported_settings = {}
         settings_file = _find_backup_file(extract_dir, "settings.json")

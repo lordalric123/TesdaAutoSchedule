@@ -4,3 +4,4 @@ python-calamine
 openpyxl
 werkzeug
 gunicorn
+psycopg2-binary
