@@ -23,6 +23,9 @@ def _load_dotenv() -> None:
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
+        if line.startswith(("postgres://", "postgresql://")):  # bare URL without DATABASE_URL=
+            os.environ.setdefault("DATABASE_URL", line)
+            continue
         key, _, value = line.partition("=")
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
