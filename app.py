@@ -170,8 +170,19 @@ def normalize_settings(raw: dict | None = None) -> dict:
     settings = dict(raw or settings_store.read())
     if not settings.get("province_assessors_path"):
         settings["province_assessors_path"] = settings.get("assessors_path") or str(DEFAULT_PROVINCE_ASSESSORS)
-    settings["assessors_path"] = settings["province_assessors_path"]
     settings.setdefault("region_assessors_path", str(DEFAULT_REGION_ASSESSORS))
+    # Settings are shared between devices through the database, so a stored path like
+    # C:\Users\...\assessment_centers.xlsx written by your computer means nothing on Render.
+    # Always resolve by file name inside this device's own excel folder.
+    for key, default in (
+        ("centers_path", DEFAULT_CENTERS),
+        ("province_assessors_path", DEFAULT_PROVINCE_ASSESSORS),
+        ("region_assessors_path", DEFAULT_REGION_ASSESSORS),
+    ):
+        stored = str(settings.get(key) or "")
+        name = stored.replace("\\", "/").rsplit("/", 1)[-1]
+        settings[key] = str(EXCEL_DIR / name) if name else str(default)
+    settings["assessors_path"] = settings["province_assessors_path"]
     settings.setdefault("home_province", DEFAULT_HOME_PROVINCE)
     theme = dict(DEFAULT_THEME)
     theme.update(settings.get("theme") or {})
