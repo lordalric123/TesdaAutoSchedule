@@ -23,7 +23,7 @@ from monitoring_export import (
     build_monitoring_workbook,
     build_monitoring_workbook_range,
 )
-from storage import JsonStore, storage_mode, push_dir as push_files_to_db, sync_on_startup as sync_files_on_startup
+from storage import JsonStore, storage_mode, push_dir as push_files_to_db, sync_on_startup as sync_files_on_startup, refresh_files_if_changed
 
 ROOT = Path(__file__).resolve().parent
 # The bundled/default Excel files shipped with the code — used only to seed a fresh
@@ -816,6 +816,20 @@ def upload_excel():
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc), **registry.summary()}), 400
     return jsonify({"ok": True, **registry.summary()})
+
+
+@app.before_request
+def pick_up_files_from_other_devices():
+    # Another device (e.g. your computer) may have uploaded new Excel files / a logo to the
+    # shared database. Notice that here and reload, so no restart is needed.
+    if not request.path.startswith("/api/"):
+        return None
+    try:
+        if refresh_files_if_changed(DATA_DIR, ["excel", "branding"]):
+            load_registry()
+    except Exception as exc:
+        print(f"File refresh from database failed: {exc}")
+    return None
 
 
 @app.get("/api/storage-status")

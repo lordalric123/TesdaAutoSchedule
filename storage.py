@@ -7,6 +7,7 @@ Without it, the original JSON-file behaviour is used (local development).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -167,6 +168,10 @@ class JsonStore:
 # database. At startup the database copy is restored to disk (database wins); files
 # that exist only on disk (e.g. committed in GitHub) are pushed to the database once.
 
+_known_hashes: dict = {}
+_last_check = 0.0
+
+
 def _ensure_files_table(cur) -> None:
     cur.execute("CREATE TABLE IF NOT EXISTS file_store (path TEXT PRIMARY KEY, data BYTEA NOT NULL)")
 
@@ -186,15 +191,18 @@ def sync_on_startup(base_dir: Path, subdirs: list[str]) -> None:
                 dest = base_dir / rel
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_bytes(bytes(data))
+                _known_hashes[rel] = hashlib.md5(bytes(data)).hexdigest()
             folder = base_dir / sub
             if folder.exists():
                 for f in folder.iterdir():
                     rel = f"{sub}/{f.name}"
                     if f.is_file() and rel not in in_db:
+                        blob = f.read_bytes()
+                        _known_hashes[rel] = hashlib.md5(blob).hexdigest()
                         cur.execute(
                             "INSERT INTO file_store (path, data) VALUES (%s, %s) "
                             "ON CONFLICT (path) DO UPDATE SET data = EXCLUDED.data",
-                            (rel, psycopg2.Binary(f.read_bytes())),
+                            (rel, psycopg2.Binary(blob)),
                         )
 
 
@@ -212,9 +220,54 @@ def push_dir(base_dir: Path, sub: str) -> None:
         for f in names:
             rel = f"{sub}/{f.name}"
             keep.append(rel)
+            blob = f.read_bytes()
+            _known_hashes[rel] = hashlib.md5(blob).hexdigest()
             cur.execute(
                 "INSERT INTO file_store (path, data) VALUES (%s, %s) "
                 "ON CONFLICT (path) DO UPDATE SET data = EXCLUDED.data",
-                (rel, psycopg2.Binary(f.read_bytes())),
+                (rel, psycopg2.Binary(blob)),
             )
         cur.execute("DELETE FROM file_store WHERE path LIKE %s AND NOT (path = ANY(%s))", (sub + "/%", keep))
+
+
+def refresh_files_if_changed(base_dir: Path, subdirs: list[str], every: float = 10.0) -> bool:
+    """Pull files changed in the database by another device (e.g. an upload made locally).
+
+    Checked at most once every `every` seconds. Returns True when something on disk changed,
+    so the caller can reload the Excel registry.
+    """
+    global _last_check
+    if not DATABASE_URL:
+        return False
+    now = time.monotonic()
+    if now - _last_check < every:
+        return False
+    _last_check = now
+    changed = False
+    for sub in subdirs:
+        def listing(cur, sub=sub):
+            cur.execute("SELECT path, md5(data) FROM file_store WHERE path LIKE %s", (sub + "/%",))
+            return cur.fetchall()
+
+        rows = _db_run(listing)
+        remote = {rel: digest for rel, digest in rows}
+        for rel, digest in remote.items():
+            if _known_hashes.get(rel) == digest:
+                continue
+
+            def fetch(cur, rel=rel):
+                cur.execute("SELECT data FROM file_store WHERE path = %s", (rel,))
+                return cur.fetchone()
+
+            row = _db_run(fetch)
+            if row:
+                dest = base_dir / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(bytes(row[0]))
+                _known_hashes[rel] = digest
+                changed = True
+        for rel in [r for r in list(_known_hashes) if r.startswith(sub + "/") and r not in remote]:
+            (base_dir / rel).unlink(missing_ok=True)  # removed elsewhere (e.g. logo reset)
+            _known_hashes.pop(rel, None)
+            changed = True
+    return changed
