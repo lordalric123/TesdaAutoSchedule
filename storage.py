@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -18,6 +19,35 @@ if DATABASE_URL.startswith("postgres://"):  # psycopg2 wants the postgresql:// s
     DATABASE_URL = "postgresql://" + DATABASE_URL[len("postgres://"):]
 
 
+CACHE_SECONDS = float(os.environ.get("DB_CACHE_SECONDS", "5"))
+_conn = None
+_conn_lock = Lock()
+
+
+def _db_run(fn):
+    """Run fn(cursor) on one shared, reused connection (reconnecting once if Neon dropped it)."""
+    global _conn
+    import psycopg2
+
+    with _conn_lock:
+        for attempt in (1, 2):
+            try:
+                if _conn is None or _conn.closed:
+                    _conn = psycopg2.connect(DATABASE_URL, connect_timeout=15)
+                    _conn.autocommit = True
+                with _conn.cursor() as cur:
+                    return fn(cur)
+            except (psycopg2.OperationalError, psycopg2.InterfaceError):
+                try:
+                    if _conn is not None:
+                        _conn.close()
+                except Exception:
+                    pass
+                _conn = None
+                if attempt == 2:
+                    raise
+
+
 class JsonStore:
     def __init__(self, path: Path, default: Any) -> None:
         self.path = path
@@ -25,6 +55,8 @@ class JsonStore:
         self.lock = Lock()
         self.key = path.name
         self.use_db = bool(DATABASE_URL)
+        self._cache: str | None = None
+        self._cache_at = 0.0
         if self.use_db:
             self._init_db()
         else:
@@ -33,38 +65,55 @@ class JsonStore:
                 self.write(default)
 
     # ---- Postgres backend -------------------------------------------------
-    def _connect(self):
-        import psycopg2
-
-        return psycopg2.connect(DATABASE_URL, connect_timeout=15)
-
     def _init_db(self) -> None:
-        with self.lock, self._connect() as conn, conn.cursor() as cur:
+        initial = self.default
+        if self.path.exists():  # keep existing data: seed the database from the old JSON file
+            try:
+                initial = json.loads(self.path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                initial = self.default
+
+        def op(cur):
             cur.execute("CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-            initial = self.default
-            if self.path.exists():  # keep existing data: seed the database from the old JSON file
-                try:
-                    initial = json.loads(self.path.read_text(encoding="utf-8"))
-                except (OSError, ValueError):
-                    initial = self.default
             cur.execute(
                 "INSERT INTO kv_store (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING",
                 (self.key, json.dumps(initial, ensure_ascii=False)),
             )
 
+        with self.lock:
+            _db_run(op)
+
     def _db_read(self) -> Any:
-        with self._connect() as conn, conn.cursor() as cur:
+        # Served from memory when fresh: one Neon round trip every few seconds instead of
+        # one per call (a single page load reads the stores many times).
+        now = time.monotonic()
+        if self._cache is not None and now - self._cache_at < CACHE_SECONDS:
+            return json.loads(self._cache)
+
+        def op(cur):
             cur.execute("SELECT value FROM kv_store WHERE key = %s", (self.key,))
-            row = cur.fetchone()
-        return json.loads(row[0]) if row else self.default
+            return cur.fetchone()
+
+        row = _db_run(op)
+        text = row[0] if row else json.dumps(self.default, ensure_ascii=False)
+        self._cache, self._cache_at = text, now
+        return json.loads(text)
 
     def _db_write(self, data: Any) -> None:
-        with self._connect() as conn, conn.cursor() as cur:
+        text = json.dumps(data, ensure_ascii=False)
+        if text == self._cache:  # unchanged (the app re-saves settings often): skip the round trip
+            self._cache_at = time.monotonic()
+            return
+
+        def op(cur):
             cur.execute(
                 "INSERT INTO kv_store (key, value) VALUES (%s, %s) "
                 "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-                (self.key, json.dumps(data, ensure_ascii=False)),
+                (self.key, text),
             )
+
+        _db_run(op)
+        self._cache, self._cache_at = text, time.monotonic()
 
     # ---- Public API (unchanged) ------------------------------------------
     def read(self) -> Any:
