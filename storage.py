@@ -14,6 +14,20 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
+def _load_dotenv() -> None:
+    """Read KEY=VALUE lines from a .env file next to the app (never overrides real env vars)."""
+    env_file = Path(__file__).resolve().parent / ".env"
+    if not env_file.is_file():
+        return
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+_load_dotenv()
 DATABASE_URL = (os.environ.get("DATABASE_URL") or "").strip()
 if DATABASE_URL.startswith("postgres://"):  # psycopg2 wants the postgresql:// scheme
     DATABASE_URL = "postgresql://" + DATABASE_URL[len("postgres://"):]
