@@ -62,6 +62,17 @@ def _db_run(fn):
                     raise
 
 
+def storage_mode() -> dict:
+    """Which backend is in use (for the /api/storage-status check). Never exposes the password."""
+    if not DATABASE_URL:
+        return {"mode": "files", "database": False}
+    host = DATABASE_URL.split("@")[-1].split("/")[0]
+    return {"mode": "postgres", "database": True, "host": host}
+
+
+print("Storage:", "Postgres (" + storage_mode()["host"] + ")" if DATABASE_URL else "local JSON files (DATABASE_URL not set)")
+
+
 class JsonStore:
     def __init__(self, path: Path, default: Any) -> None:
         self.path = path

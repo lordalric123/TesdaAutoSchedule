@@ -23,7 +23,7 @@ from monitoring_export import (
     build_monitoring_workbook,
     build_monitoring_workbook_range,
 )
-from storage import JsonStore, push_dir as push_files_to_db, sync_on_startup as sync_files_on_startup
+from storage import JsonStore, storage_mode, push_dir as push_files_to_db, sync_on_startup as sync_files_on_startup
 
 ROOT = Path(__file__).resolve().parent
 # The bundled/default Excel files shipped with the code — used only to seed a fresh
@@ -816,6 +816,17 @@ def upload_excel():
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc), **registry.summary()}), 400
     return jsonify({"ok": True, **registry.summary()})
+
+
+@app.get("/api/storage-status")
+def storage_status():
+    info = storage_mode()
+    try:
+        info["task_status_entries"] = len(task_status_store.read())
+        info["assessments"] = len(assessments_store.read())
+    except Exception as exc:
+        info["error"] = str(exc)
+    return jsonify(info)
 
 
 @app.post("/api/settings/home-province")
