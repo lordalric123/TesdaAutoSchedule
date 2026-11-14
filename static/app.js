@@ -231,10 +231,12 @@ function taskChecklist(items, kind, expanded) {
     ].filter(([, value]) => value);
     return `<div class="task ${item.done ? "task-done" : ""}">
       <div class="row-actions" style="justify-content:space-between; align-items:flex-start; gap:8px; flex-wrap:nowrap">
-        <label class="task-check" style="flex:1; min-width:0">
+        ${kind === "assessment"
+          ? `<div style="flex:1; min-width:0"><b>${escapeHtml(detail)}</b></div>`
+          : `<label class="task-check" style="flex:1; min-width:0">
           <input type="checkbox" data-dash-task-id="${escapeHtml(item.task_id)}" ${item.done ? "checked" : ""} />
           <b>${escapeHtml(detail)}</b>
-        </label>
+        </label>`}
         ${fields.length ? `<button type="button" class="linkish dash-detail-toggle" data-dash-key="${escapeHtml(key)}">${isExpanded ? "Hide details ▴" : "Details ▾"}</button>` : ""}
       </div>
       <span>${escapeHtml(a.assessment_center)} · ${escapeHtml(a.qualification)}</span>
@@ -250,10 +252,8 @@ async function renderDashboard() {
   state.dashboard.expanded = state.dashboard.expanded || {};
   const expanded = state.dashboard.expanded;
 
-  const tasksKeys = [
-    ...data.schedule_today.map((item) => dashboardItemKey("schedule", item)),
-    ...data.results_today.map((item) => dashboardItemKey("results", item)),
-  ];
+  const scheduleKeys = data.schedule_today.map((item) => dashboardItemKey("schedule", item));
+  const resultsKeys = data.results_today.map((item) => dashboardItemKey("results", item));
   const assessmentsKeys = [
     ...data.assessments_today.map((item) => dashboardItemKey("assessment", item)),
     ...data.upcoming.map((item) => dashboardItemKey("assessment", item)),
@@ -269,28 +269,38 @@ async function renderDashboard() {
     <div class="grid two" style="margin-top:16px">
       <div class="card">
         <div class="row-actions" style="justify-content:space-between; align-items:center">
-          <h3 style="margin:0">Today's tasks</h3>
-          ${tasksKeys.length ? `<div class="row-actions">
-            <button type="button" class="linkish" data-dash-expand-all="tasks">Expand all</button>
-            <button type="button" class="linkish" data-dash-collapse-all="tasks">Collapse all</button>
+          <h3 style="margin:0">Create portal schedule</h3>
+          ${scheduleKeys.length ? `<div class="row-actions">
+            <button type="button" class="linkish" data-dash-expand-all="schedule">Expand all</button>
+            <button type="button" class="linkish" data-dash-collapse-all="schedule">Collapse all</button>
           </div>` : ""}
         </div>
-        <p class="hint">Portal schedule reminders and results due ${fmt(data.today)}. Check them off once done.</p>
+        <p class="hint">Portal schedules to create for ${fmt(data.today)}. Check them off once done.</p>
         ${taskChecklist(data.schedule_today, "schedule", expanded)}
-        ${taskChecklist(data.results_today, "results", expanded)}
       </div>
       <div class="card">
         <div class="row-actions" style="justify-content:space-between; align-items:center">
-          <h3 style="margin:0">Today's assessments</h3>
-          ${assessmentsKeys.length ? `<div class="row-actions">
-            <button type="button" class="linkish" data-dash-expand-all="assessments">Expand all</button>
-            <button type="button" class="linkish" data-dash-collapse-all="assessments">Collapse all</button>
+          <h3 style="margin:0">Submit results</h3>
+          ${resultsKeys.length ? `<div class="row-actions">
+            <button type="button" class="linkish" data-dash-expand-all="results">Expand all</button>
+            <button type="button" class="linkish" data-dash-collapse-all="results">Collapse all</button>
           </div>` : ""}
         </div>
-        ${taskChecklist(data.assessments_today, "assessment", expanded)}
-        <h3 style="margin-top:18px">Upcoming</h3>
-        ${taskChecklist(data.upcoming, "assessment", expanded)}
+        <p class="hint">Results due ${fmt(data.today)}. Check them off once submitted.</p>
+        ${taskChecklist(data.results_today, "results", expanded)}
       </div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <div class="row-actions" style="justify-content:space-between; align-items:center">
+        <h3 style="margin:0">Today's assessments</h3>
+        ${assessmentsKeys.length ? `<div class="row-actions">
+          <button type="button" class="linkish" data-dash-expand-all="assessments">Expand all</button>
+          <button type="button" class="linkish" data-dash-collapse-all="assessments">Collapse all</button>
+        </div>` : ""}
+      </div>
+      ${taskChecklist(data.assessments_today, "assessment", expanded)}
+      <h3 style="margin-top:18px">Upcoming</h3>
+      ${taskChecklist(data.upcoming, "assessment", expanded)}
     </div>
   `;
   document.querySelectorAll(".dash-detail-toggle").forEach((btn) => {
@@ -300,13 +310,15 @@ async function renderDashboard() {
       renderDashboard();
     });
   });
-  $("view-dashboard").querySelector('[data-dash-expand-all="tasks"]')?.addEventListener("click", () => {
-    tasksKeys.forEach((key) => { state.dashboard.expanded[key] = true; });
-    renderDashboard();
-  });
-  $("view-dashboard").querySelector('[data-dash-collapse-all="tasks"]')?.addEventListener("click", () => {
-    tasksKeys.forEach((key) => { state.dashboard.expanded[key] = false; });
-    renderDashboard();
+  [["schedule", scheduleKeys], ["results", resultsKeys]].forEach(([name, keys]) => {
+    $("view-dashboard").querySelector(`[data-dash-expand-all="${name}"]`)?.addEventListener("click", () => {
+      keys.forEach((key) => { state.dashboard.expanded[key] = true; });
+      renderDashboard();
+    });
+    $("view-dashboard").querySelector(`[data-dash-collapse-all="${name}"]`)?.addEventListener("click", () => {
+      keys.forEach((key) => { state.dashboard.expanded[key] = false; });
+      renderDashboard();
+    });
   });
   $("view-dashboard").querySelector('[data-dash-expand-all="assessments"]')?.addEventListener("click", () => {
     assessmentsKeys.forEach((key) => { state.dashboard.expanded[key] = true; });

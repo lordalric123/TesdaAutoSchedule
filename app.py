@@ -1080,7 +1080,7 @@ def dashboard():
                 results_due_count += 1
 
     upcoming.sort(key=lambda x: x["start_date"])
-    tasks_today_all = schedule_today + results_today + assessments_today
+    tasks_today_all = schedule_today + results_today  # assessments have no checkbox
     return jsonify(
         {
             "today": current,
