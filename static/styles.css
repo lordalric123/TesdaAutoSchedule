@@ -750,3 +750,45 @@ td .linkish, th .linkish, .assessment-card .linkish, .record-card .linkish, .ass
 td .linkish:hover, .assessment-card .linkish:hover, .record-card .linkish:hover { text-decoration: underline; }
 .directory-qual-row .linkish { text-align: left; font: inherit; font-weight: 600; color: var(--cyan); padding: 0; display: inline; }
 .directory-qual-row .linkish:hover { text-decoration: underline; }
+
+/* Assessor Directory — qualification rows with expandable history */
+.dq-row { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--input-bg); transition: border-color 0.15s; }
+.dq-row.is-open { border-color: rgba(94, 234, 212, 0.4); }
+.dq-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.dq-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.dq-row .dq-name { font: inherit; font-weight: 700; font-size: 0.95rem; color: var(--cyan); padding: 0; text-align: left; }
+.dq-row .dq-name:hover { text-decoration: underline; }
+.dq-meta { display: flex; gap: 6px 18px; flex-wrap: wrap; font-size: 0.8rem; color: var(--muted); }
+.dq-meta b { color: var(--text); font-weight: 600; }
+.dq-expired, .dq-expired b { color: var(--danger); }
+.dq-none { font-size: 0.78rem; color: var(--muted); opacity: 0.8; }
+.dq-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: rgba(94, 234, 212, 0.08); color: var(--cyan); font: inherit; font-size: 0.78rem; font-weight: 600; cursor: pointer; }
+.dq-toggle:hover { background: rgba(94, 234, 212, 0.16); }
+.dq-count { min-width: 18px; padding: 0 6px; border-radius: 999px; background: var(--cyan); color: #04211d; font-size: 0.72rem; line-height: 18px; text-align: center; }
+.dq-caret { font-size: 0.7rem; }
+.dq-history { margin-top: 6px; border-left: 2px solid var(--cyan); border-radius: 4px; padding: 4px 0 4px 12px; display: flex; flex-direction: column; }
+.dq-history-head, .dq-history-row { display: grid; grid-template-columns: minmax(130px, 1.1fr) 2fr 56px; gap: 12px; align-items: center; padding: 6px 4px; font-size: 0.84rem; }
+.dq-history-head { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); padding-bottom: 4px; }
+.dq-history-row { border-top: 1px solid var(--line); }
+.dq-history-row .linkish { font-weight: 600; text-align: left; padding: 0; color: var(--cyan); }
+.dq-history-row .linkish:hover { text-decoration: underline; }
+.dq-history-head span:last-child, .dq-pax { text-align: right; }
+@media (max-width: 640px) {
+  .dq-history-head { display: none; }
+  .dq-history-row { grid-template-columns: 1fr auto; }
+  .dq-history-row span:nth-child(2) { grid-column: 1 / -1; grid-row: 2; color: var(--muted); }
+}
+/* keep the generic ".task b {display:block}" / ".task span" rules from restyling directory rows */
+.dq-row b { display: inline; }
+.dq-row span { font-size: inherit; }
+.dq-row .dq-meta { font-size: 0.8rem; }
+.dq-row .dq-meta span { color: var(--muted); }
+.dq-row .dq-meta .dq-expired, .dq-row .dq-meta .dq-expired b { color: var(--danger); }
+.dq-row .dq-none { font-size: 0.78rem; }
+.dq-row .dq-toggle { font-size: 0.78rem; color: var(--cyan); }
+.dq-row .dq-count { color: #04211d; font-size: 0.72rem; display: inline-block; }
+.dq-row .dq-history-head, .dq-row .dq-history-row { font-size: 0.84rem; }
+.dq-row .dq-history-head { font-size: 0.68rem; }
+.dq-row .dq-history-head span, .dq-row .dq-history-row span { color: var(--muted); }
+.dq-row .dq-history-row span:nth-child(2) { color: var(--text); }
+.dq-row .chip { font-size: 0.72rem; }

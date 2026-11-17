@@ -1620,19 +1620,41 @@ function directoryAssessorCardHtml(a, expanded) {
         </dl>` : ""}
         <p class="muted" style="font-size:0.78rem; text-transform:uppercase; letter-spacing:0.06em; margin-top:14px">Accredited qualifications</p>
         <div class="directory-qual-list">
-          ${qualDetails.map((q) => `
-            <div class="directory-qual-row">
-              <div class="row-actions" style="gap:6px; align-items:center">
-                <b><button type="button" class="linkish" data-goto-qual="${escapeHtml(q.qualification)}" ${q.source ? `data-goto-source="${escapeHtml(q.source)}"` : ""} title="Open in Qualification Finder">${escapeHtml(q.qualification)}</button></b>
-                ${q.source ? `<span class="chip ${q.source === "region" ? "gold" : ""}">${q.source === "region" ? "Region" : "Province"}</span>` : ""}
+          ${qualDetails.map((q) => {
+            const hist = q.history || [];
+            const hkey = `${key}::${q.qualification}::${q.source || ""}`;
+            const open = Boolean((state.directory.expandedQuals || {})[hkey]);
+            const expired = q.valid_until && q.valid_until < todayIso();
+            return `
+            <div class="dq-row ${open ? "is-open" : ""}">
+              <div class="dq-head">
+                <div class="dq-title">
+                  <button type="button" class="linkish dq-name" data-goto-qual="${escapeHtml(q.qualification)}" ${q.source ? `data-goto-source="${escapeHtml(q.source)}"` : ""} title="Open in Qualification Finder">${escapeHtml(q.qualification)}</button>
+                  ${q.source ? `<span class="chip ${q.source === "region" ? "gold" : ""}">${q.source === "region" ? "Region" : "Province"}</span>` : ""}
+                  ${expired ? `<span class="chip rose">Expired</span>` : ""}
+                </div>
+                ${hist.length
+                  ? `<button type="button" class="dq-toggle directory-qual-toggle" data-qual-key="${escapeHtml(hkey)}" aria-expanded="${open}">
+                      <span>History</span><span class="dq-count">${hist.length}</span><span class="dq-caret">${open ? "▴" : "▾"}</span>
+                    </button>`
+                  : `<span class="dq-none">No history yet</span>`}
               </div>
-              <span class="muted">
-                ${q.accreditation_number ? `Code #: ${escapeHtml(q.accreditation_number)}` : "No accreditation number on file"}
-                ${q.valid_until ? ` · Valid until: ${escapeHtml(fmt(q.valid_until))}` : ""}
-              </span>
-              ${q.valid_until && q.valid_until < todayIso() ? `<span class="chip rose">Expired</span>` : ""}
-            </div>
-          `).join("")}
+              <div class="dq-meta">
+                <span>${q.accreditation_number ? `Code # <b>${escapeHtml(q.accreditation_number)}</b>` : "No accreditation number on file"}</span>
+                ${q.valid_until ? `<span class="${expired ? "dq-expired" : ""}">Valid until <b>${escapeHtml(fmt(q.valid_until))}</b></span>` : ""}
+              </div>
+              ${open && hist.length ? `
+              <div class="dq-history">
+                <div class="dq-history-head"><span>Date</span><span>Assessment center</span><span>Pax</span></div>
+                ${hist.map((h) => `
+                  <div class="dq-history-row">
+                    <button type="button" class="linkish" data-open-assessment="${escapeHtml(h.id)}" title="Open in Assessment Scheduler records">${escapeHtml(h.date_label)}</button>
+                    <span>${escapeHtml(h.assessment_center)}</span>
+                    <span class="dq-pax">${escapeHtml(String(h.pax))}</span>
+                  </div>`).join("")}
+              </div>` : ""}
+            </div>`;
+          }).join("")}
         </div>
       ` : ""}
     </div>
@@ -1700,7 +1722,7 @@ async function renderDirectory() {
   box.focus({ preventScroll: true });
   box.selectionStart = box.selectionEnd = box.value.length;
   $("directory-clear").onclick = () => {
-    state.directory = { query: "", source: state.directory.source, expanded: {} };
+    state.directory = { query: "", source: state.directory.source, expanded: {}, expandedQuals: {} };
     renderDirectory();
   };
   document.querySelectorAll("#directory-source-tabs .tab-btn").forEach((btn) => {
@@ -1708,6 +1730,17 @@ async function renderDirectory() {
       state.directory.source = btn.dataset.source;
       renderDirectory();
     });
+  });
+  document.querySelectorAll(".directory-qual-toggle").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.directory.expandedQuals = state.directory.expandedQuals || {};
+      const k = btn.dataset.qualKey;
+      state.directory.expandedQuals[k] = !state.directory.expandedQuals[k];
+      renderDirectory();
+    });
+  });
+  document.querySelectorAll("#view-directory [data-open-assessment]").forEach((el) => {
+    el.addEventListener("click", () => openRecord(el.dataset.openAssessment));
   });
   document.querySelectorAll(".directory-assessor-toggle").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -1751,27 +1784,31 @@ function accreditationStatusHtml(row) {
 
 async function renderHistory() {
   const { qualification, assessor_type } = state.history;
+  const province = state.history.province || "";
   const tab = state.history.tab === "log" ? "log" : "rotation";
   state.history.exportStart = state.history.exportStart || "";
   state.history.exportEnd = state.history.exportEnd || "";
   const params = new URLSearchParams();
   if (qualification) params.set("qualification", qualification);
   if (assessor_type) params.set("assessor_type", assessor_type);
+  if (province) params.set("province", province);
   const data = await api(`/api/assessor-rotation?${params.toString()}`);
   const sourceLabel = assessor_type === "region" ? "region-based" : assessor_type === "province" ? "province-based" : "";
+  const provinceLabel = province ? ` · assessors from ${province}` : "";
 
   const rotationPanel = !data.qualification ? `
     <p class="empty">Select a qualification above to see its assessor rotation — who's assessed it, when they last did, and who's next in line.</p>
   ` : `
-    <p class="hint">Rotation for <b>${escapeHtml(data.qualification)}</b>${sourceLabel ? ` · ${sourceLabel} assessors only` : ""} · sorted so whoever has gone longest without an assignment (or has never been assigned) is listed first. Click a row to see full assessment history.</p>
+    <p class="hint">Rotation for <b>${escapeHtml(data.qualification)}</b>${sourceLabel ? ` · ${sourceLabel} assessors only` : ""}${provinceLabel} · sorted so whoever has gone longest without an assignment (or has never been assigned) is listed first. Click a row to see full assessment history.</p>
     ${data.rotation.length ? `<div class="table-wrap desktop-table"><table>
-      <thead><tr><th>#</th><th>Assessor</th><th>Type</th><th>Times Assessed</th><th>Last Assessed</th><th>Since</th><th>Accreditation</th></tr></thead>
+      <thead><tr><th>#</th><th>Assessor</th><th>Type</th><th>Province</th><th>Times Assessed</th><th>Last Assessed</th><th>Since</th><th>Accreditation</th></tr></thead>
       <tbody>
         ${data.rotation.map((row, i) => `
           <tr class="rotation-row" data-assessor-row="${i}" style="cursor:pointer">
             <td>${i + 1}</td>
-            <td><b>${escapeHtml(row.assessor)}</b>${i === 0 ? ` <span class="chip gold">Next up</span>` : ""}</td>
+            <td><b>${assessorLink({ name: row.assessor })}</b>${i === 0 ? ` <span class="chip gold">Next up</span>` : ""}</td>
             <td>${escapeHtml(row.assessor_type_label)}</td>
+            <td>${row.province ? escapeHtml(row.province) : `<span class="muted">—</span>`}</td>
             <td>${row.assessments_conducted}</td>
             <td>${row.last_assessment_date ? escapeHtml(fmt(row.last_assessment_date)) : `<span class="muted">Never</span>`}</td>
             <td>${escapeHtml(daysSinceLabel(row.days_since_last))}</td>
@@ -1782,9 +1819,10 @@ async function renderHistory() {
     </table></div>
     <div class="mobile-records">${data.rotation.map((row, i) => `
       <article class="record-card" data-assessor-row="${i}" style="cursor:pointer">
-        <h4>${i + 1}. ${escapeHtml(row.assessor)}${i === 0 ? ` <span class="chip gold">Next up</span>` : ""}</h4>
+        <h4>${i + 1}. ${assessorLink({ name: row.assessor })}${i === 0 ? ` <span class="chip gold">Next up</span>` : ""}</h4>
         <div class="record-meta">
           <span class="chip">${escapeHtml(row.assessor_type_label)}</span>
+          ${row.province ? `<span class="chip">${escapeHtml(row.province)}</span>` : ""}
           <span>${row.assessments_conducted} assessment${row.assessments_conducted === 1 ? "" : "s"}</span>
           ${accreditationStatusHtml(row)}
         </div>
@@ -1797,7 +1835,7 @@ async function renderHistory() {
   const logPaged = paginate(data.assessment_log, state.historyLogPage);
   state.historyLogPage = logPaged.page;
   const logPanel = `
-    <p class="hint">${data.qualification ? `Every recorded assessment for <b>${escapeHtml(data.qualification)}</b>` : "Every recorded assessment across all qualifications"}${sourceLabel ? ` involving a ${sourceLabel} assessor` : ""}, most recent first.</p>
+    <p class="hint">${data.qualification ? `Every recorded assessment for <b>${escapeHtml(data.qualification)}</b>` : "Every recorded assessment across all qualifications"}${sourceLabel ? ` involving a ${sourceLabel} assessor` : ""}${province ? ` from ${escapeHtml(province)}` : ""}, most recent first.</p>
     ${data.assessment_log.length ? `<div class="table-wrap desktop-table"><table>
       <thead><tr><th>Date</th>${data.qualification ? "" : "<th>Qualification</th>"}<th>Assessment Center</th><th>Assessor(s)</th><th>Pax</th></tr></thead>
       <tbody>
@@ -1845,6 +1883,13 @@ async function renderHistory() {
         </div>
         <button class="ghost" id="hist-reset" type="button">Clear filters</button>
       </div>
+      <div class="field full" style="max-width:420px; margin-top:12px">
+        <label>Assessor's province</label>
+        <select id="hist-province">
+          <option value="">All provinces</option>
+          ${(data.provinces || []).map((p) => `<option value="${escapeHtml(p)}" ${p === province ? "selected" : ""}>${escapeHtml(p)}</option>`).join("")}
+        </select>
+      </div>
 
       <div class="row-actions" style="margin-top:14px; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px">
         <div class="pill-tabs tabs-sm">
@@ -1864,14 +1909,16 @@ async function renderHistory() {
     state.history = {
       qualification: $("hist-qual").value,
       assessor_type: state.history.assessor_type,
+      province: $("hist-province").value,
       tab: state.history.tab,
     };
     state.historyLogPage = 1;
     renderHistory();
   };
   $("hist-qual").onchange = applyHistory;
+  $("hist-province").onchange = applyHistory;
   $("hist-reset").onclick = () => {
-    state.history = { qualification: "", assessor_type: "province", tab: state.history.tab };
+    state.history = { qualification: "", assessor_type: "province", province: "", tab: state.history.tab };
     state.historyLogPage = 1;
     renderHistory();
   };
@@ -1885,7 +1932,10 @@ async function renderHistory() {
   $("tab-rotation")?.addEventListener("click", () => { state.history.tab = "rotation"; renderHistory(); });
   $("tab-log")?.addEventListener("click", () => { state.history.tab = "log"; renderHistory(); });
   document.querySelectorAll("[data-assessor-row]").forEach((el) => {
-    el.addEventListener("click", () => showAssessorHistory(data.rotation[Number(el.dataset.assessorRow)], data.qualification));
+    el.addEventListener("click", (event) => {
+      if (event.target.closest("[data-goto-assessor]")) return; // name link goes to the directory instead
+      showAssessorHistory(data.rotation[Number(el.dataset.assessorRow)], data.qualification);
+    });
   });
   document.querySelectorAll("[data-open-assessment]").forEach((el) => {
     el.addEventListener("click", () => {

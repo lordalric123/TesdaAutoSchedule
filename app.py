@@ -461,6 +461,7 @@ def build_assessor_rotation(
     registry: "ExcelRegistry",
     qualification: str = "",
     assessor_type: str = "",
+    province: str = "",
 ) -> dict:
     """For a qualification, show every eligible assessor with their assessment history,
     ordered so the assessor who has gone longest without an assignment (or has never
@@ -470,6 +471,18 @@ def build_assessor_rotation(
     assessor_type = (assessor_type or "").strip()
     if assessor_type not in {"", "province", "region"}:
         raise ValueError("Assessor type must be province or region.")
+
+    province = " ".join((province or "").split())
+    province_key = province.casefold()
+    everyone = registry.assessors(None, None)
+    province_by_name: dict[str, str] = {}
+    for person in everyone:
+        if person.get("province"):
+            province_by_name.setdefault(" ".join(person["name"].casefold().split()), person["province"])
+    all_provinces = sorted({p_["province"] for p_ in everyone if p_.get("province")}, key=str.casefold)
+
+    def province_of(name: str) -> str:
+        return province_by_name.get(" ".join((name or "").casefold().split()), "")
 
     decorated_all = [decorate(item) for item in assessments]
     all_qualifications = sorted(
@@ -492,6 +505,7 @@ def build_assessor_rotation(
                 "assessor_type": source,
                 "assessor_type_label": "Region-Based" if source == "region" else "Province-Based",
                 "address": "",
+                "province": province_of(name),
                 "designation": "",
                 "accreditation_number": "",
                 "valid_until": "",
@@ -510,6 +524,7 @@ def build_assessor_rotation(
             key = (person["name"].casefold(), source)
             row = ensure(key, person.get("display_name") or person["name"], source)
             row["address"] = person.get("address", "")
+            row["province"] = person.get("province") or row["province"]
             row["designation"] = person.get("designation") or person.get("company") or ""
             valid_until = person.get("valid_until") or ""
             row["accreditation_number"] = person.get("accreditation_number") or ""
@@ -535,9 +550,13 @@ def build_assessor_rotation(
     assessment_log = []
     log_source = decorated if qualification else decorated_all
     for item in log_source:
-        entry_assessors = item["assessors"]
+        entry_assessors = [{**a, "province": province_of(a["name"])} for a in item["assessors"]]
         if assessor_type:
             entry_assessors = [a for a in entry_assessors if a["assessor_type"] == assessor_type]
+            if not entry_assessors:
+                continue
+        if province_key:
+            entry_assessors = [a for a in entry_assessors if a["province"].casefold() == province_key]
             if not entry_assessors:
                 continue
         assessment_log.append(
@@ -558,6 +577,8 @@ def build_assessor_rotation(
     today_iso = date.today().isoformat()
     rotation = []
     for row in entries.values():
+        if province_key and (row.get("province") or "").casefold() != province_key:
+            continue
         history_sorted = sorted(row["history"], key=lambda h: h["date"], reverse=True)
         row["history"] = history_sorted
         row["assessments_conducted"] = len(history_sorted)
@@ -579,6 +600,8 @@ def build_assessor_rotation(
     return {
         "qualification": qualification,
         "assessor_type": assessor_type,
+        "province": province,
+        "provinces": all_provinces,
         "today": today_iso,
         "qualifications": all_qualifications,
         "rotation": rotation,
@@ -910,6 +933,35 @@ def assessor_directory():
             if needle in p["name"].casefold()
             or needle in (p.get("display_name") or "").casefold()
         ]
+    # Per-qualification assessment history for each person (name + qualification match), so the
+    # directory can expand a qualification to show when they last assessed it.
+    def norm(value: str) -> str:
+        return " ".join((value or "").casefold().split())
+
+    history: dict[tuple[str, str], list[dict]] = {}
+    for raw in assessments_store.read():
+        item = decorate(raw)
+        for entry in item["assessors"]:
+            history.setdefault((norm(entry["name"]), norm(item["qualification"])), []).append(
+                {
+                    "id": item["id"],
+                    "start_date": item["start_date"],
+                    "date_label": item["date_label"],
+                    "assessment_center": item["assessment_center"],
+                    "pax": item["pax"],
+                }
+            )
+    for person in people:
+        for detail in person.get("qualification_details") or []:
+            seen_ids: set[str] = set()
+            rows = []
+            for h in history.get((norm(person["name"]), norm(detail["qualification"])), []):
+                if h["id"] in seen_ids:
+                    continue
+                seen_ids.add(h["id"])
+                rows.append(h)
+            rows.sort(key=lambda h: h["start_date"], reverse=True)
+            detail["history"] = rows
     return jsonify({"query": query, "source": source or "all", "assessors": people, "count": len(people)})
 
 
@@ -1226,8 +1278,9 @@ def reports():
 def assessor_rotation():
     qualification = (request.args.get("qualification") or "").strip()
     assessor_type = request.args.get("assessor_type") or ""
+    province = request.args.get("province") or ""
     try:
-        data = build_assessor_rotation(assessments_store.read(), registry, qualification, assessor_type)
+        data = build_assessor_rotation(assessments_store.read(), registry, qualification, assessor_type, province)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     return jsonify(data)
