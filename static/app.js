@@ -229,7 +229,7 @@ function taskChecklist(items, kind, expanded) {
       ["Results Due Date(s)", (a.results_reminder_list || []).map(fmt).join("; ")],
       ["Remarks", a.remarks],
     ].filter(([, value]) => value);
-    return `<div class="task ${item.done ? "task-done" : ""}">
+    return `<div class="task ${item.done ? "task-done" : ""} ${item.flagged ? "task-flagged" : ""}">
       <div class="row-actions" style="justify-content:space-between; align-items:flex-start; gap:8px; flex-wrap:nowrap">
         ${kind === "assessment"
           ? `<div style="flex:1; min-width:0"><b>${escapeHtml(detail)}</b></div>`
@@ -237,6 +237,7 @@ function taskChecklist(items, kind, expanded) {
           <input type="checkbox" data-dash-task-id="${escapeHtml(item.task_id)}" ${item.done ? "checked" : ""} />
           <b>${escapeHtml(detail)}</b>
         </label>`}
+        ${kind === "assessment" ? "" : `<button type="button" class="task-flag ${item.flagged ? "on" : ""}" data-flag-task="${escapeHtml(item.task_id)}" data-flagged="${item.flagged ? "1" : "0"}" title="${item.flagged ? "Remove concern mark" : "Mark as having a concern"}" aria-label="Mark concern" aria-pressed="${item.flagged ? "true" : "false"}">!</button>`}
         ${fields.length ? `<button type="button" class="linkish dash-detail-toggle" data-dash-key="${escapeHtml(key)}">${isExpanded ? "Hide details ▴" : "Details ▾"}</button>` : ""}
       </div>
       <span>${escapeHtml(a.assessment_center)} · ${escapeHtml(a.qualification)}</span>
@@ -248,7 +249,12 @@ function taskChecklist(items, kind, expanded) {
 }
 
 async function renderDashboard() {
-  const data = await api("/api/dashboard");
+  const viewDate = state.dashboard.date || "";
+  const data = await api(`/api/dashboard${viewDate ? `?date=${encodeURIComponent(viewDate)}` : ""}`);
+  const isToday = data.is_today;
+  const dayDiff = Math.round((new Date(`${data.date}T00:00:00`) - new Date(`${data.today}T00:00:00`)) / 86400000);
+  const dayName = isToday ? "today" : dayDiff === -1 ? "yesterday" : dayDiff === 1 ? "tomorrow" : `on ${fmt(data.date)}`;
+  const dayChip = isToday ? "Today" : dayDiff === -1 ? "Yesterday" : dayDiff === 1 ? "Tomorrow" : dayDiff < 0 ? `${-dayDiff} days ago` : `In ${dayDiff} days`;
   state.dashboard.expanded = state.dashboard.expanded || {};
   const expanded = state.dashboard.expanded;
 
@@ -260,8 +266,18 @@ async function renderDashboard() {
   ];
 
   $("view-dashboard").innerHTML = `
-    <div class="grid stats">
-      <div class="card"><div class="stat-value">${data.summary.tasks_pending_today}</div><div class="stat-label">Tasks pending today (${data.summary.tasks_today} total)</div></div>
+    <div class="card day-nav">
+      <button type="button" class="ghost" id="dash-prev" aria-label="Previous day">‹ Previous day</button>
+      <div class="day-nav-center">
+        <b>${escapeHtml(fmt(data.date))}</b>
+        <span class="chip ${isToday ? "" : "gold"}">${isToday ? "Today" : escapeHtml(dayChip)}</span>
+        <input type="date" id="dash-date" value="${escapeHtml(data.date)}" aria-label="Jump to date" />
+        ${isToday ? "" : `<button type="button" class="ghost" id="dash-today">Back to today</button>`}
+      </div>
+      <button type="button" class="ghost" id="dash-next" aria-label="Next day">Next day ›</button>
+    </div>
+    <div class="grid stats" style="margin-top:16px">
+      <div class="card"><div class="stat-value">${data.summary.tasks_pending_today}</div><div class="stat-label">Tasks pending ${escapeHtml(dayName)} (${data.summary.tasks_today} total)</div></div>
       <div class="card"><div class="stat-value">${data.summary.assessments_this_month}</div><div class="stat-label">Assessments this month</div></div>
       <div class="card"><div class="stat-value">${data.summary.upcoming_assessments}</div><div class="stat-label">Upcoming assessments</div></div>
       <div class="card"><div class="stat-value">${data.summary.requiring_scheduling}</div><div class="stat-label">Still needing portal schedule</div></div>
@@ -275,7 +291,7 @@ async function renderDashboard() {
             <button type="button" class="linkish" data-dash-collapse-all="schedule">Collapse all</button>
           </div>` : ""}
         </div>
-        <p class="hint">Portal schedules to create for ${fmt(data.today)}. Check them off once done.</p>
+        <p class="hint">Portal schedules to create ${isToday ? "for" : "on"} ${fmt(data.date)}. Check them off once done. Use <b>!</b> to flag a concern.</p>
         ${taskChecklist(data.schedule_today, "schedule", expanded)}
       </div>
       <div class="card">
@@ -286,23 +302,44 @@ async function renderDashboard() {
             <button type="button" class="linkish" data-dash-collapse-all="results">Collapse all</button>
           </div>` : ""}
         </div>
-        <p class="hint">Results due ${fmt(data.today)}. Check them off once submitted.</p>
+        <p class="hint">Results due ${fmt(data.date)}. Check them off once submitted. Use <b>!</b> to flag a concern.</p>
         ${taskChecklist(data.results_today, "results", expanded)}
       </div>
     </div>
     <div class="card" style="margin-top:16px">
       <div class="row-actions" style="justify-content:space-between; align-items:center">
-        <h3 style="margin:0">Today's assessments</h3>
+        <h3 style="margin:0">${isToday ? "Today's assessments" : `Assessments on ${escapeHtml(fmt(data.date))}`}</h3>
         ${assessmentsKeys.length ? `<div class="row-actions">
           <button type="button" class="linkish" data-dash-expand-all="assessments">Expand all</button>
           <button type="button" class="linkish" data-dash-collapse-all="assessments">Collapse all</button>
         </div>` : ""}
       </div>
       ${taskChecklist(data.assessments_today, "assessment", expanded)}
-      <h3 style="margin-top:18px">Upcoming</h3>
-      ${taskChecklist(data.upcoming, "assessment", expanded)}
+      ${isToday ? `<h3 style="margin-top:18px">Upcoming</h3>
+      ${taskChecklist(data.upcoming, "assessment", expanded)}` : ""}
     </div>
   `;
+  const goDay = (iso) => {
+    state.dashboard.date = iso && iso !== data.today ? iso : "";
+    renderDashboard();
+  };
+  $("dash-prev").onclick = () => goDay(shiftIso(data.date, -1));
+  $("dash-next").onclick = () => goDay(shiftIso(data.date, 1));
+  $("dash-date").onchange = (e) => { if (e.target.value) goDay(e.target.value); };
+  $("dash-today")?.addEventListener("click", () => goDay(""));
+  document.querySelectorAll("[data-flag-task]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const flagged = btn.dataset.flagged !== "1";
+      try {
+        await api("/api/tasks/flag", { method: "POST", headers: jsonHeaders(), body: JSON.stringify({ task_id: btn.dataset.flagTask, flagged }) });
+      } catch (err) {
+        toast(err.message, "error");
+        return;
+      }
+      toast(flagged ? "Marked with a concern." : "Concern mark removed.");
+      renderDashboard();
+    });
+  });
   document.querySelectorAll(".dash-detail-toggle").forEach((btn) => {
     btn.addEventListener("click", () => {
       const key = btn.dataset.dashKey;
@@ -343,7 +380,13 @@ async function renderDashboard() {
       renderDashboard();
     });
   });
-  maybeNotify(data);
+  if (isToday) maybeNotify(data);
+}
+
+function shiftIso(iso, days) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(y, m - 1, d + days);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
 }
 
 function todayIso() {
@@ -1274,9 +1317,10 @@ async function renderCalendar() {
     const isToday = iso === payload.today;
     const allDone = info && info.pending === 0;
     cells.push(`
-      <button class="day ${isToday ? "today" : ""}" data-day="${iso}">
+      <button class="day ${isToday ? "today" : ""} ${info && info.flagged ? "has-flag" : ""}" data-day="${iso}">
         <div class="day-num">${day}</div>
         ${info ? `<div class="day-alert ${allDone ? "day-alert-done" : ""}">${allDone ? `${info.count} done ✓` : `${info.pending} pending`}</div>` : ""}
+        ${info && info.flagged ? `<div class="day-flag" title="${info.flagged} flagged with a concern">! ${info.flagged}</div>` : ""}
       </button>
     `);
   }
@@ -1334,21 +1378,35 @@ function showDay(iso) {
   }
   const uniqueAssessments = [];
   const pendingCount = events.filter((e) => !e.done).length;
+  state.calendar.expanded = state.calendar.expanded || {};
+  const eventKeys = events.map((e) => `${e.kind}::${e.task_id}`);
   const blocks = events.map((event) => {
     if (event.kind === "assessment" && uniqueAssessments.includes(event.assessment.id)) return "";
     if (event.kind === "assessment") uniqueAssessments.push(event.assessment.id);
     const icon = event.kind === "approved" ? "Approved Date" : event.kind === "results" ? "Results Reminder" : "Assessment";
     const a = event.assessment;
-    return `<div class="event-block ${event.done ? "event-done" : ""}">
+    const ekey = `${event.kind}::${event.task_id}`;
+    const open = Boolean(state.calendar.expanded[ekey]);
+    const fields = assessmentDetailFields(a);
+    return `<div class="event-block ${event.done ? "event-done" : ""} ${event.flagged ? "event-flagged" : ""}">
+      <div class="row-actions" style="justify-content:space-between; align-items:center; flex-wrap:nowrap">
       <label class="task-check">
         <input type="checkbox" data-task-id="${escapeHtml(event.task_id)}" ${event.done ? "checked" : ""} />
         <span class="chip ${event.kind === "results" ? "rose" : event.kind === "assessment" ? "gold" : ""}">${icon}</span>
         ${event.done ? `<span class="chip" style="background:rgba(74,222,128,0.15);color:var(--ok)">Done</span>` : ""}
       </label>
+      <button type="button" class="task-flag ${event.flagged ? "on" : ""}" data-flag-event="${escapeHtml(event.task_id)}" data-flagged="${event.flagged ? "1" : "0"}" title="${event.flagged ? "Remove concern mark" : "Mark as having a concern"}" aria-label="Mark concern" aria-pressed="${event.flagged ? "true" : "false"}">!</button>
+      </div>
       <h3 style="margin-top:8px">${escapeHtml(event.title)}</h3>
       <p>${escapeHtml(event.detail)}</p>
       <p class="muted">${escapeHtml(a.assessment_center)} · ${escapeHtml(a.qualification)} · ${escapeHtml(a.date_label)}</p>
-      <button class="ghost" data-open="${a.id}">View assessment</button>
+      ${open && fields.length ? `<dl class="assessment-card-grid" style="margin:10px 0">
+        ${fields.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(String(value))}</dd></div>`).join("")}
+      </dl>` : ""}
+      <div class="row-actions">
+        ${fields.length ? `<button type="button" class="linkish" data-cal-toggle="${escapeHtml(ekey)}">${open ? "Hide details ▴" : "Details ▾"}</button>` : ""}
+        <button class="ghost" data-open="${a.id}">View assessment</button>
+      </div>
     </div>`;
   }).join("");
   openModal(`
@@ -1356,9 +1414,24 @@ function showDay(iso) {
       <div><p class="eyebrow">${iso} — ${pendingCount === 0 ? "All done" : `${pendingCount} pending`}</p><h2>${fmt(iso)} — ${events.length} ${events.length === 1 ? "Task" : "Tasks"}</h2></div>
       <button class="ghost" id="close-modal">Close</button>
     </div>
+    <div class="row-actions" style="margin-bottom:6px">
+      <button type="button" class="linkish" id="cal-expand-all">Expand all</button>
+      <button type="button" class="linkish" id="cal-collapse-all">Collapse all</button>
+    </div>
     ${blocks}
   `);
   $("close-modal").onclick = closeModal;
+  $("cal-expand-all").onclick = () => { eventKeys.forEach((k) => { state.calendar.expanded[k] = true; }); showDay(iso); };
+  $("cal-collapse-all").onclick = () => { eventKeys.forEach((k) => { state.calendar.expanded[k] = false; }); showDay(iso); };
+  document.querySelectorAll("[data-cal-toggle]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.calendar.expanded[btn.dataset.calToggle] = !state.calendar.expanded[btn.dataset.calToggle];
+      showDay(iso);
+    });
+  });
+  document.querySelectorAll("[data-flag-event]").forEach((btn) => {
+    btn.addEventListener("click", () => flagCalendarTask(btn.dataset.flagEvent, btn.dataset.flagged !== "1", iso));
+  });
   document.querySelectorAll("[data-task-id]").forEach((box) => {
     box.addEventListener("change", () => toggleTask(box.dataset.taskId, box.checked, iso));
   });
@@ -1368,6 +1441,40 @@ function showDay(iso) {
       openRecord(btn.dataset.open);
     });
   });
+}
+
+function assessmentDetailFields(a) {
+  return [
+    ["Dates", a.date_label],
+    ["Duration", durationLabel(a.duration_type)],
+    ["Assessors", a.assessors_label],
+    ["Number of Pax", a.pax],
+    ["TESDA Representative", a.tesda_representative],
+    ["Portal Schedule Date(s)", (a.schedule_reminder_list || []).map(fmt).join("; ")],
+    ["Results Due Date(s)", (a.results_reminder_list || []).map(fmt).join("; ")],
+    ["Remarks", a.remarks],
+  ].filter(([, value]) => value);
+}
+
+async function flagCalendarTask(taskId, flagged, iso) {
+  try {
+    await api("/api/tasks/flag", { method: "POST", headers: jsonHeaders(), body: JSON.stringify({ task_id: taskId, flagged }) });
+  } catch (err) {
+    toast(err.message, "error");
+    return;
+  }
+  const events = state.calendar.payload?.events?.[iso] || [];
+  events.forEach((ev) => { if (ev.task_id === taskId) ev.flagged = flagged; });
+  const compact = state.calendar.payload?.compact?.[iso];
+  if (compact) compact.flagged = events.filter((ev) => ev.flagged).length;
+  const dayBtn = document.querySelector(`.day[data-day="${iso}"]`);
+  if (dayBtn && compact) {
+    dayBtn.classList.toggle("has-flag", compact.flagged > 0);
+    dayBtn.querySelector(".day-flag")?.remove();
+    if (compact.flagged > 0) dayBtn.insertAdjacentHTML("beforeend", `<div class="day-flag" title="${compact.flagged} flagged with a concern">! ${compact.flagged}</div>`);
+  }
+  toast(flagged ? "Marked with a concern." : "Concern mark removed.");
+  showDay(iso);
 }
 
 async function toggleTask(taskId, done, iso) {
@@ -1508,9 +1615,12 @@ async function renderFinder() {
             ${data.centers.length ? data.centers.map((c) => `
               <div class="task ${picked.assessment_center === c.name ? "task-picked" : ""}">
                 <b>${escapeHtml(c.name)}</b>
-                <span>${escapeHtml(c.address || "")}${c.manager ? " · " + escapeHtml(c.manager) : ""}</span>
-                ${c.telephone ? `<span>Tel: ${escapeHtml(c.telephone)}</span>` : ""}
-                ${c.sector ? `<span>Sector: ${escapeHtml(c.sector)}</span>` : ""}
+                <span class="center-line">${escapeHtml(c.address || "")}</span>
+                ${c.manager ? `<span class="center-line">Manager: ${escapeHtml(c.manager)}</span>` : ""}
+                ${c.telephone ? `<span class="center-line">Tel: ${escapeHtml(c.telephone)}</span>` : ""}
+                ${c.sector ? `<span class="center-line">Sector: ${escapeHtml(c.sector)}</span>` : ""}
+                <span class="center-line">${c.accreditation_number ? `Code #: ${escapeHtml(c.accreditation_number)}` : "No accreditation number on file"}</span>
+                <span class="center-line">${c.valid_until ? `Valid until: <b style="display:inline">${escapeHtml(fmt(c.valid_until))}</b>` : "No expiry date on file"}${c.valid_until && c.valid_until < todayIso() ? ` <span class="chip rose">Expired</span>` : ""}</span>
                 <div class="row-actions" style="margin-top:8px">
                   <button class="ghost" data-pick-center="${escapeHtml(c.name)}">${picked.assessment_center === c.name ? "Selected ✓" : "Use center"}</button>
                 </div>

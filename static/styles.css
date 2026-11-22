@@ -792,3 +792,22 @@ td .linkish:hover, .assessment-card .linkish:hover, .record-card .linkish:hover 
 .dq-row .dq-history-head span, .dq-row .dq-history-row span { color: var(--muted); }
 .dq-row .dq-history-row span:nth-child(2) { color: var(--text); }
 .dq-row .chip { font-size: 0.72rem; }
+.task .center-line { display: block; }
+
+/* Dashboard day navigator + flagged ("!") tasks */
+.day-nav { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.day-nav-center { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; flex: 1; }
+.day-nav-center b { font-size: 1.05rem; }
+.day-nav-center input[type="date"] { width: auto; padding: 6px 10px; }
+.task-flag { flex: none; width: 26px; height: 26px; padding: 0; border-radius: 50%; border: 1px solid var(--line); background: transparent; color: var(--muted); font-weight: 800; font-size: 0.9rem; line-height: 1; cursor: pointer; }
+.task-flag:hover { border-color: var(--gold); color: var(--gold); }
+.task-flag.on { background: var(--gold); border-color: var(--gold); color: #2b2100; }
+.task.task-flagged { padding: 12px; border: 1px solid var(--gold); border-radius: 10px; margin: 4px 0; border-color: var(--gold); background: rgba(232, 195, 106, 0.12); box-shadow: inset 3px 0 0 var(--gold); }
+.task.task-flagged.task-done { opacity: 0.8; }
+@media (max-width: 640px) { .day-nav > button { flex: 1; } .day-nav-center { order: -1; flex-basis: 100%; } }
+
+/* Calendar: flagged ("!") days and events */
+.day.has-flag { border-color: var(--gold); box-shadow: inset 0 0 0 1px rgba(232, 195, 106, 0.5); }
+.day-flag { margin-top: 4px; display: inline-block; padding: 1px 7px; border-radius: 999px; background: var(--gold); color: #2b2100; font-size: 0.72rem; font-weight: 800; }
+.event-block.event-flagged { border-left: 3px solid var(--gold); padding-left: 12px; background: rgba(232, 195, 106, 0.1); border-radius: 8px; }
+.event-block.event-flagged.event-done { opacity: 0.85; }

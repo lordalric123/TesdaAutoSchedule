@@ -627,6 +627,7 @@ def calendar_events(calendar_type: str, year: int, month: int) -> dict[str, list
                             "assessment": item,
                             "task_id": tid,
                             "done": bool(statuses.get(tid, {}).get("done")),
+                            "flagged": bool(statuses.get(tid, {}).get("flagged")),
                         }
                     )
         elif calendar_type == "results":
@@ -642,6 +643,7 @@ def calendar_events(calendar_type: str, year: int, month: int) -> dict[str, list
                             "assessment": item,
                             "task_id": tid,
                             "done": bool(statuses.get(tid, {}).get("done")),
+                            "flagged": bool(statuses.get(tid, {}).get("flagged")),
                         }
                     )
         else:
@@ -1087,7 +1089,16 @@ def delete_assessment(assessment_id: str):
 
 @app.get("/api/dashboard")
 def dashboard():
-    current = today().isoformat()
+    real_today = today()
+    view = real_today
+    date_arg = (request.args.get("date") or "").strip()
+    if date_arg:
+        try:
+            view = parse_iso_date(date_arg)
+        except Exception:
+            return jsonify({"error": "date must be YYYY-MM-DD."}), 400
+    current = view.isoformat()  # the day whose tasks are shown (today unless browsing other days)
+    real_current = real_today.isoformat()
     statuses = task_status_store.read()
     assessments = [decorate(item) for item in assessments_store.read()]
     schedule_today = []
@@ -1103,31 +1114,31 @@ def dashboard():
 
     def with_task(item: dict, kind: str, event_date: str) -> dict:
         tid = task_id(item["id"], kind, event_date)
-        return {**item, "task_id": tid, "done": bool(statuses.get(tid, {}).get("done"))}
+        return {**item, "task_id": tid, "done": bool(statuses.get(tid, {}).get("done")), "flagged": bool(statuses.get(tid, {}).get("flagged"))}
 
     for item in assessments:
         start = parse_iso_date(item["start_date"])
         end = parse_iso_date(item["end_date"])
-        if start.year == today().year and start.month == today().month:
+        if start.year == real_today.year and start.month == real_today.month:
             this_month += 1
-        if start <= today() <= end:
+        if start <= view <= end:
             assessments_today.append(with_task(item, "assessment", item["start_date"]))
-        if start > today():
+        if start > real_today:
             upcoming.append(with_task(item, "assessment", item["start_date"]))
         for pair in item["schedule_reminder_dates"]:
             key = (item["id"], pair["assessment_date"], "schedule")
             if pair["date"] == current and key not in seen_schedule:
                 seen_schedule.add(key)
                 tid = task_id(item["id"], "schedule", pair["assessment_date"])
-                schedule_today.append({**pair, "assessment": item, "task_id": tid, "done": bool(statuses.get(tid, {}).get("done"))})
-            if pair["date"] >= current:
+                schedule_today.append({**pair, "assessment": item, "task_id": tid, "done": bool(statuses.get(tid, {}).get("done")), "flagged": bool(statuses.get(tid, {}).get("flagged"))})
+            if pair["date"] >= real_current:
                 needing_schedule.append(key)
         for pair in item["results_reminder_dates"]:
             key = (item["id"], pair["assessment_date"], "results")
             if pair["date"] == current and key not in seen_results:
                 seen_results.add(key)
                 tid = task_id(item["id"], "results", pair["assessment_date"])
-                results_today.append({**pair, "assessment": item, "task_id": tid, "done": bool(statuses.get(tid, {}).get("done"))})
+                results_today.append({**pair, "assessment": item, "task_id": tid, "done": bool(statuses.get(tid, {}).get("done")), "flagged": bool(statuses.get(tid, {}).get("flagged"))})
             if pair["date"] == current:
                 results_due_count += 1
 
@@ -1135,7 +1146,9 @@ def dashboard():
     tasks_today_all = schedule_today + results_today  # assessments have no checkbox
     return jsonify(
         {
-            "today": current,
+            "today": real_current,
+            "date": current,
+            "is_today": current == real_current,
             "schedule_today": schedule_today,
             "results_today": results_today,
             "assessments_today": assessments_today,
@@ -1164,6 +1177,7 @@ def calendar():
         day: {
             "count": len(items),
             "pending": sum(1 for item in items if not item.get("done")),
+            "flagged": sum(1 for item in items if item.get("flagged")),
             "kinds": sorted({item["kind"] for item in items}),
         }
         for day, items in events.items()
@@ -1188,12 +1202,42 @@ def toggle_task():
         return jsonify({"error": "task_id is required."}), 400
     done = bool(payload.get("done", True))
     statuses = task_status_store.read()
+    entry = dict(statuses.get(tid) or {})
     if done:
-        statuses[tid] = {"done": True, "done_at": datetime.now().isoformat(timespec="seconds")}
+        entry["done"] = True
+        entry["done_at"] = datetime.now().isoformat(timespec="seconds")
+    else:
+        entry.pop("done", None)
+        entry.pop("done_at", None)
+    _store_task_entry(statuses, tid, entry)
+    task_status_store.write(statuses)
+    return jsonify({"task_id": tid, "done": done, "flagged": bool(entry.get("flagged"))})
+
+
+@app.post("/api/tasks/flag")
+def flag_task():
+    """Mark/unmark a task as 'has a concern' (yellow). Independent of done."""
+    payload = request.get_json(force=True) or {}
+    tid = (payload.get("task_id") or "").strip()
+    if not tid:
+        return jsonify({"error": "task_id is required."}), 400
+    flagged = bool(payload.get("flagged", True))
+    statuses = task_status_store.read()
+    entry = dict(statuses.get(tid) or {})
+    if flagged:
+        entry["flagged"] = True
+    else:
+        entry.pop("flagged", None)
+    _store_task_entry(statuses, tid, entry)
+    task_status_store.write(statuses)
+    return jsonify({"task_id": tid, "flagged": flagged, "done": bool(entry.get("done"))})
+
+
+def _store_task_entry(statuses: dict, tid: str, entry: dict) -> None:
+    if entry.get("done") or entry.get("flagged"):
+        statuses[tid] = entry
     else:
         statuses.pop(tid, None)
-    task_status_store.write(statuses)
-    return jsonify({"task_id": tid, "done": done})
 
 
 @app.get("/api/assessor-rotation/export")
