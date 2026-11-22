@@ -1,7 +1,6 @@
 flask
-pandas
-python-calamine
-openpyxl
-werkzeug
 gunicorn
+pandas
+openpyxl
+python-calamine
 psycopg2-binary

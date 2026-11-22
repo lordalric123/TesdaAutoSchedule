@@ -260,6 +260,7 @@ async function renderDashboard() {
 
   const scheduleKeys = data.schedule_today.map((item) => dashboardItemKey("schedule", item));
   const resultsKeys = data.results_today.map((item) => dashboardItemKey("results", item));
+  const flaggedKeys = (data.flagged_tasks || []).map((item) => dashboardItemKey(item.kind, item));
   const assessmentsKeys = [
     ...data.assessments_today.map((item) => dashboardItemKey("assessment", item)),
     ...data.upcoming.map((item) => dashboardItemKey("assessment", item)),
@@ -318,6 +319,26 @@ async function renderDashboard() {
       ${isToday ? `<h3 style="margin-top:18px">Upcoming</h3>
       ${taskChecklist(data.upcoming, "assessment", expanded)}` : ""}
     </div>
+    <div class="card flagged-card" style="margin-top:16px">
+      <div class="row-actions" style="justify-content:space-between; align-items:center">
+        <h3 style="margin:0">Flagged tasks <span class="chip gold">${(data.flagged_tasks || []).length}</span></h3>
+        ${flaggedKeys.length ? `<div class="row-actions">
+          <button type="button" class="linkish" data-dash-expand-all="flagged">Expand all</button>
+          <button type="button" class="linkish" data-dash-collapse-all="flagged">Collapse all</button>
+        </div>` : ""}
+      </div>
+      <p class="hint">Every task marked with <b>!</b>, on any date, so a concern doesn't get lost. Click <b>!</b> again to clear it.</p>
+      ${(data.flagged_tasks || []).length ? data.flagged_tasks.map((item) => `
+        <div class="flagged-item">
+          <div class="flagged-due">
+            <span class="chip ${item.kind === "results" ? "rose" : ""}">${item.kind === "results" ? "Results" : "Portal schedule"}</span>
+            <span>Due ${escapeHtml(fmt(item.date))}</span>
+            ${!item.done && item.date < data.today ? `<span class="chip rose">Overdue</span>` : ""}
+            ${item.done ? `<span class="chip" style="background:rgba(74,222,128,0.15);color:var(--ok)">Done</span>` : ""}
+          </div>
+          ${taskChecklist([item], item.kind, expanded)}
+        </div>`).join("") : `<p class="empty">No flagged tasks.</p>`}
+    </div>
   `;
   const goDay = (iso) => {
     state.dashboard.date = iso && iso !== data.today ? iso : "";
@@ -347,7 +368,7 @@ async function renderDashboard() {
       renderDashboard();
     });
   });
-  [["schedule", scheduleKeys], ["results", resultsKeys]].forEach(([name, keys]) => {
+  [["schedule", scheduleKeys], ["results", resultsKeys], ["flagged", flaggedKeys]].forEach(([name, keys]) => {
     $("view-dashboard").querySelector(`[data-dash-expand-all="${name}"]`)?.addEventListener("click", () => {
       keys.forEach((key) => { state.dashboard.expanded[key] = true; });
       renderDashboard();

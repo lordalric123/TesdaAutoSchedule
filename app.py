@@ -1142,6 +1142,22 @@ def dashboard():
             if pair["date"] == current:
                 results_due_count += 1
 
+    # Every flagged ("!") portal-schedule / results task on any date, so concerns never get lost.
+    flagged_tasks = []
+    for item in assessments:
+        for kind, field in (("schedule", "schedule_reminder_dates"), ("results", "results_reminder_dates")):
+            seen_flagged = set()
+            for pair in item[field]:
+                tid = task_id(item["id"], kind, pair["assessment_date"])
+                if tid in seen_flagged or not statuses.get(tid, {}).get("flagged"):
+                    continue
+                seen_flagged.add(tid)
+                flagged_tasks.append(
+                    {**pair, "kind": kind, "assessment": item, "task_id": tid,
+                     "done": bool(statuses.get(tid, {}).get("done")), "flagged": True}
+                )
+    flagged_tasks.sort(key=lambda x: (x["date"], x["kind"]))
+
     upcoming.sort(key=lambda x: x["start_date"])
     tasks_today_all = schedule_today + results_today  # assessments have no checkbox
     return jsonify(
@@ -1152,6 +1168,7 @@ def dashboard():
             "schedule_today": schedule_today,
             "results_today": results_today,
             "assessments_today": assessments_today,
+            "flagged_tasks": flagged_tasks,
             "upcoming": upcoming[:8],
             "summary": {
                 "assessments_this_month": this_month,

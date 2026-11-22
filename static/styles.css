@@ -811,3 +811,9 @@ td .linkish:hover, .assessment-card .linkish:hover, .record-card .linkish:hover 
 .day-flag { margin-top: 4px; display: inline-block; padding: 1px 7px; border-radius: 999px; background: var(--gold); color: #2b2100; font-size: 0.72rem; font-weight: 800; }
 .event-block.event-flagged { border-left: 3px solid var(--gold); padding-left: 12px; background: rgba(232, 195, 106, 0.1); border-radius: 8px; }
 .event-block.event-flagged.event-done { opacity: 0.85; }
+
+/* Dashboard: list of all flagged tasks */
+.flagged-item { border-top: 1px solid var(--line); padding-top: 8px; margin-top: 8px; }
+.flagged-item:first-of-type { border-top: 0; margin-top: 0; }
+.flagged-due { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 0.8rem; color: var(--muted); }
+.flagged-item .task { border-bottom: 0; }
