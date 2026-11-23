@@ -817,3 +817,10 @@ td .linkish:hover, .assessment-card .linkish:hover, .record-card .linkish:hover 
 .flagged-item:first-of-type { border-top: 0; margin-top: 0; }
 .flagged-due { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 0.8rem; color: var(--muted); }
 .flagged-item .task { border-bottom: 0; }
+
+/* Remarks on flagged tasks */
+.task-note { margin-top: 6px; padding: 6px 10px; border-left: 2px solid var(--gold); background: rgba(232, 195, 106, 0.08); border-radius: 6px; font-size: 0.85rem; color: var(--text); }
+.task-note em { font-style: normal; font-weight: 700; color: var(--gold); margin-right: 4px; }
+.note-editor { margin: 6px 0 4px; display: flex; flex-direction: column; gap: 8px; }
+.note-editor textarea { width: 100%; resize: vertical; }
+.note-edit { margin: 4px 0 0 2px; font-size: 0.82rem; }

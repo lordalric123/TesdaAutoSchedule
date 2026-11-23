@@ -241,11 +241,82 @@ function taskChecklist(items, kind, expanded) {
         ${fields.length ? `<button type="button" class="linkish dash-detail-toggle" data-dash-key="${escapeHtml(key)}">${isExpanded ? "Hide details ▴" : "Details ▾"}</button>` : ""}
       </div>
       <span>${escapeHtml(a.assessment_center)} · ${escapeHtml(a.qualification)}</span>
+      ${item.flagged && item.note ? `<div class="task-note"><em>Remark:</em> ${escapeHtml(item.note).replace(/\n/g, "<br>")}</div>` : ""}
       ${isExpanded && fields.length ? `<dl class="assessment-card-grid" style="margin-top:10px">
         ${fields.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(String(value))}</dd></div>`).join("")}
       </dl>` : ""}
     </div>`;
   }).join("");
+}
+
+// Plain-text summary of results not yet submitted — pastes cleanly into Messenger.
+function pendingResultsText(items, dateIso) {
+  const pending = items.filter((item) => !item.done);
+  if (!pending.length) return "";
+  // Group by school; the date is written once per school (or per entry only if a school has several different dates).
+  const bySchool = new Map();
+  pending.forEach((item) => {
+    const a = item.assessment || item;
+    const school = a.assessment_center || "—";
+    if (!bySchool.has(school)) bySchool.set(school, []);
+    bySchool.get(school).push({
+      date: item.assessment_date,
+      qualification: a.qualification,
+      assessors: (a.assessors || []).map((x) => x.name).filter(Boolean).join(", ") || "—",
+    });
+  });
+  const blocks = [...bySchool.entries()].map(([school, rows]) => {
+    rows.sort((x, y) => String(x.date).localeCompare(String(y.date)));
+    const oneDate = new Set(rows.map((r) => r.date)).size === 1;
+    const head = oneDate ? `${school} - ${fmt(rows[0].date)}` : school;
+    const lines = rows.map((r) => `- ${r.qualification}${oneDate ? "" : ` (${fmt(r.date)})`}: ${r.assessors}`);
+    return [head, ...lines].join("\n");
+  });
+  return `Results not yet submitted (${pending.length}) - due ${fmt(dateIso)}\n\n${blocks.join("\n\n")}`;
+}
+
+// Plain-text list of every flagged task (any date), grouped by school, for Messenger.
+function flaggedTasksText(items) {
+  if (!items.length) return "";
+  const bySchool = new Map();
+  items.forEach((item) => {
+    const a = item.assessment || item;
+    const school = a.assessment_center || "—";
+    if (!bySchool.has(school)) bySchool.set(school, []);
+    bySchool.get(school).push({
+      date: item.assessment_date,
+      kind: item.kind === "results" ? "Results" : "Portal schedule",
+      qualification: a.qualification,
+      done: item.done,
+      note: item.note || "",
+      assessors: (a.assessors || []).map((x) => x.name).filter(Boolean).join(", ") || "—",
+    });
+  });
+  const blocks = [...bySchool.entries()].map(([school, rows]) => {
+    rows.sort((x, y) => String(x.date).localeCompare(String(y.date)) || x.kind.localeCompare(y.kind));
+    const oneDate = new Set(rows.map((r) => r.date)).size === 1;
+    const head = oneDate ? `${school} - ${fmt(rows[0].date)}` : school;
+    const lines = rows.map((r) => `- ${r.kind}: ${r.qualification}${oneDate ? "" : ` (${fmt(r.date)})`} - ${r.assessors}${r.done ? " (done)" : ""}${r.note ? `\n  Remark: ${r.note.replace(/\n/g, " / ")}` : ""}`);
+    return [head, ...lines].join("\n");
+  });
+  return `Flagged tasks (${items.length})\n\n${blocks.join("\n\n")}`;
+}
+
+async function copyToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (err) {
+    const box = document.createElement("textarea"); // fallback for non-secure contexts
+    box.value = text;
+    box.style.cssText = "position:fixed; opacity:0";
+    document.body.appendChild(box);
+    box.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    box.remove();
+    return ok;
+  }
 }
 
 async function renderDashboard() {
@@ -299,6 +370,7 @@ async function renderDashboard() {
         <div class="row-actions" style="justify-content:space-between; align-items:center">
           <h3 style="margin:0">Submit results</h3>
           ${resultsKeys.length ? `<div class="row-actions">
+            ${data.results_today.some((item) => !item.done) ? `<button type="button" class="ghost" id="copy-pending-results" title="Copy the unchecked results as text for Messenger">Copy pending</button>` : ""}
             <button type="button" class="linkish" data-dash-expand-all="results">Expand all</button>
             <button type="button" class="linkish" data-dash-collapse-all="results">Collapse all</button>
           </div>` : ""}
@@ -323,6 +395,7 @@ async function renderDashboard() {
       <div class="row-actions" style="justify-content:space-between; align-items:center">
         <h3 style="margin:0">Flagged tasks <span class="chip gold">${(data.flagged_tasks || []).length}</span></h3>
         ${flaggedKeys.length ? `<div class="row-actions">
+          <button type="button" class="ghost" id="copy-flagged-tasks" title="Copy the flagged tasks as text for Messenger">Copy flagged</button>
           <button type="button" class="linkish" data-dash-expand-all="flagged">Expand all</button>
           <button type="button" class="linkish" data-dash-collapse-all="flagged">Collapse all</button>
         </div>` : ""}
@@ -337,9 +410,49 @@ async function renderDashboard() {
             ${item.done ? `<span class="chip" style="background:rgba(74,222,128,0.15);color:var(--ok)">Done</span>` : ""}
           </div>
           ${taskChecklist([item], item.kind, expanded)}
+          ${state.dashboard.editingNote === item.task_id
+            ? `<div class="note-editor">
+                <textarea id="note-text" rows="3" maxlength="500" placeholder="Add a remark about the concern...">${escapeHtml(item.note || "")}</textarea>
+                <div class="row-actions">
+                  <button type="button" class="ghost" data-note-save="${escapeHtml(item.task_id)}">Save remark</button>
+                  <button type="button" class="linkish" data-note-cancel>Cancel</button>
+                </div>
+              </div>`
+            : `<button type="button" class="linkish note-edit" data-note-edit="${escapeHtml(item.task_id)}">${item.note ? "Edit remark" : "+ Add remark"}</button>`}
         </div>`).join("") : `<p class="empty">No flagged tasks.</p>`}
     </div>
   `;
+  $("copy-pending-results")?.addEventListener("click", async () => {
+    const text = pendingResultsText(data.results_today, data.date);
+    if (!text) { toast("Nothing pending to copy."); return; }
+    if (await copyToClipboard(text)) toast("Copied. Paste it into Messenger.");
+    else toast("Couldn't copy automatically.", "error");
+  });
+  $("copy-flagged-tasks")?.addEventListener("click", async () => {
+    const text = flaggedTasksText(data.flagged_tasks || []);
+    if (!text) { toast("No flagged tasks to copy."); return; }
+    if (await copyToClipboard(text)) toast("Copied. Paste it into Messenger.");
+    else toast("Couldn't copy automatically.", "error");
+  });
+  document.querySelectorAll("[data-note-edit]").forEach((btn) => {
+    btn.addEventListener("click", () => { state.dashboard.editingNote = btn.dataset.noteEdit; renderDashboard().then(() => $("note-text")?.focus()); });
+  });
+  document.querySelectorAll("[data-note-cancel]").forEach((btn) => {
+    btn.addEventListener("click", () => { state.dashboard.editingNote = null; renderDashboard(); });
+  });
+  document.querySelectorAll("[data-note-save]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      try {
+        await api("/api/tasks/note", { method: "POST", headers: jsonHeaders(), body: JSON.stringify({ task_id: btn.dataset.noteSave, note: $("note-text").value }) });
+      } catch (err) {
+        toast(err.message, "error");
+        return;
+      }
+      state.dashboard.editingNote = null;
+      toast("Remark saved.");
+      renderDashboard();
+    });
+  });
   const goDay = (iso) => {
     state.dashboard.date = iso && iso !== data.today ? iso : "";
     renderDashboard();
@@ -1421,6 +1534,7 @@ function showDay(iso) {
       <h3 style="margin-top:8px">${escapeHtml(event.title)}</h3>
       <p>${escapeHtml(event.detail)}</p>
       <p class="muted">${escapeHtml(a.assessment_center)} · ${escapeHtml(a.qualification)} · ${escapeHtml(a.date_label)}</p>
+      ${event.flagged && event.note ? `<div class="task-note"><em>Remark:</em> ${escapeHtml(event.note).replace(/\n/g, "<br>")}</div>` : ""}
       ${open && fields.length ? `<dl class="assessment-card-grid" style="margin:10px 0">
         ${fields.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(String(value))}</dd></div>`).join("")}
       </dl>` : ""}

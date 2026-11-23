@@ -627,7 +627,7 @@ def calendar_events(calendar_type: str, year: int, month: int) -> dict[str, list
                             "assessment": item,
                             "task_id": tid,
                             "done": bool(statuses.get(tid, {}).get("done")),
-                            "flagged": bool(statuses.get(tid, {}).get("flagged")),
+                            "flagged": bool(statuses.get(tid, {}).get("flagged")), "note": statuses.get(tid, {}).get("note", ""),
                         }
                     )
         elif calendar_type == "results":
@@ -643,7 +643,7 @@ def calendar_events(calendar_type: str, year: int, month: int) -> dict[str, list
                             "assessment": item,
                             "task_id": tid,
                             "done": bool(statuses.get(tid, {}).get("done")),
-                            "flagged": bool(statuses.get(tid, {}).get("flagged")),
+                            "flagged": bool(statuses.get(tid, {}).get("flagged")), "note": statuses.get(tid, {}).get("note", ""),
                         }
                     )
         else:
@@ -1114,7 +1114,7 @@ def dashboard():
 
     def with_task(item: dict, kind: str, event_date: str) -> dict:
         tid = task_id(item["id"], kind, event_date)
-        return {**item, "task_id": tid, "done": bool(statuses.get(tid, {}).get("done")), "flagged": bool(statuses.get(tid, {}).get("flagged"))}
+        return {**item, "task_id": tid, "done": bool(statuses.get(tid, {}).get("done")), "flagged": bool(statuses.get(tid, {}).get("flagged")), "note": statuses.get(tid, {}).get("note", "")}
 
     for item in assessments:
         start = parse_iso_date(item["start_date"])
@@ -1130,7 +1130,7 @@ def dashboard():
             if pair["date"] == current and key not in seen_schedule:
                 seen_schedule.add(key)
                 tid = task_id(item["id"], "schedule", pair["assessment_date"])
-                schedule_today.append({**pair, "assessment": item, "task_id": tid, "done": bool(statuses.get(tid, {}).get("done")), "flagged": bool(statuses.get(tid, {}).get("flagged"))})
+                schedule_today.append({**pair, "assessment": item, "task_id": tid, "done": bool(statuses.get(tid, {}).get("done")), "flagged": bool(statuses.get(tid, {}).get("flagged")), "note": statuses.get(tid, {}).get("note", "")})
             if pair["date"] >= real_current:
                 needing_schedule.append(key)
         for pair in item["results_reminder_dates"]:
@@ -1138,7 +1138,7 @@ def dashboard():
             if pair["date"] == current and key not in seen_results:
                 seen_results.add(key)
                 tid = task_id(item["id"], "results", pair["assessment_date"])
-                results_today.append({**pair, "assessment": item, "task_id": tid, "done": bool(statuses.get(tid, {}).get("done")), "flagged": bool(statuses.get(tid, {}).get("flagged"))})
+                results_today.append({**pair, "assessment": item, "task_id": tid, "done": bool(statuses.get(tid, {}).get("done")), "flagged": bool(statuses.get(tid, {}).get("flagged")), "note": statuses.get(tid, {}).get("note", "")})
             if pair["date"] == current:
                 results_due_count += 1
 
@@ -1154,7 +1154,8 @@ def dashboard():
                 seen_flagged.add(tid)
                 flagged_tasks.append(
                     {**pair, "kind": kind, "assessment": item, "task_id": tid,
-                     "done": bool(statuses.get(tid, {}).get("done")), "flagged": True}
+                     "done": bool(statuses.get(tid, {}).get("done")), "flagged": True,
+                     "note": statuses.get(tid, {}).get("note", "")}
                 )
     flagged_tasks.sort(key=lambda x: (x["date"], x["kind"]))
 
@@ -1250,8 +1251,27 @@ def flag_task():
     return jsonify({"task_id": tid, "flagged": flagged, "done": bool(entry.get("done"))})
 
 
+@app.post("/api/tasks/note")
+def note_task():
+    """Save a free-text remark on a task (shown on flagged tasks)."""
+    payload = request.get_json(force=True) or {}
+    tid = (payload.get("task_id") or "").strip()
+    if not tid:
+        return jsonify({"error": "task_id is required."}), 400
+    note = "\n".join(line.strip() for line in str(payload.get("note") or "").splitlines() if line.strip())[:500]
+    statuses = task_status_store.read()
+    entry = dict(statuses.get(tid) or {})
+    if note:
+        entry["note"] = note
+    else:
+        entry.pop("note", None)
+    _store_task_entry(statuses, tid, entry)
+    task_status_store.write(statuses)
+    return jsonify({"task_id": tid, "note": note})
+
+
 def _store_task_entry(statuses: dict, tid: str, entry: dict) -> None:
-    if entry.get("done") or entry.get("flagged"):
+    if entry.get("done") or entry.get("flagged") or entry.get("note"):
         statuses[tid] = entry
     else:
         statuses.pop(tid, None)
